@@ -1013,6 +1013,7 @@
   .clipboard-root {
     width: 100%;
     height: 100%;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1247,6 +1248,7 @@
   .pvbox {
     flex: 0 0 54%;
     width: 100%;
+    box-sizing: border-box;
     display: grid;
     place-items: center;
     background: var(--sel);
@@ -1395,32 +1397,44 @@
   }
 
   .ptxt {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    align-self: stretch;
+    justify-self: stretch;
     font-size: 13px;
     line-height: 1.55;
-    padding: 20px;
+    padding: 20px 22px;
     max-height: 100%;
-    width: 100%;
     overflow-y: auto;
     word-break: break-word;
     white-space: pre-wrap;
+    text-align: left;
   }
 
   .pvi {
-    padding: 10px 14px 12px;
+    box-sizing: border-box;
+    padding: 10px 22px 14px 16px;
     overflow-y: auto;
     scrollbar-width: thin;
     flex: 1;
   }
 
   .pm {
+    box-sizing: border-box;
     display: flex;
     justify-content: space-between;
-    gap: 10px;
+    align-items: baseline;
+    gap: 12px;
     padding: 5px 10px;
     position: relative;
     font-size: 12px;
     line-height: 1.3;
     color: var(--mut);
+  }
+
+  .pm span:first-child {
+    flex-shrink: 0;
   }
 
   .pm + .pm::before {
@@ -1437,6 +1451,7 @@
     color: var(--fg);
     text-align: right;
     word-break: break-all;
+    min-width: 0;
   }
 
   .empty {
