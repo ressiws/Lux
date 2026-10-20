@@ -29,10 +29,14 @@ export function runSearchIntegrationTests(): number {
     name: "Discord",
     subtitle: "~/Start Menu/Discord",
     path: "C:\\Users\\swisser\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord.lnk",
+    location: "C:\\Users\\swisser\\AppData\\Local\\Discord\\app.exe",
     icon: null,
+    thumbnail: null,
     color: "#5865f2",
     isImage: false,
     rightLabel: "Application",
+    size: "120 MB",
+    version: "1.0.9000",
   };
 
   const sampleImage: SearchResultItem = {
@@ -41,10 +45,14 @@ export function runSearchIntegrationTests(): number {
     name: "portfolio.png",
     subtitle: "~/Pictures/portfolio.png",
     path: "C:\\Users\\swisser\\Pictures\\portfolio.png",
+    location: "C:\\Users\\swisser\\Pictures",
     icon: null,
+    thumbnail: "data:image/png;base64,sample",
     color: null,
     isImage: true,
     rightLabel: "Image",
+    size: "2.4 MB",
+    version: null,
   };
 
   const sampleDoc: SearchResultItem = {
@@ -53,10 +61,14 @@ export function runSearchIntegrationTests(): number {
     name: "notes.txt",
     subtitle: "~/Documents/notes.txt",
     path: "C:\\Users\\swisser\\Documents\\notes.txt",
+    location: "C:\\Users\\swisser\\Documents",
     icon: null,
+    thumbnail: null,
     color: null,
     isImage: false,
     rightLabel: "TXT",
+    size: "1.2 KB",
+    version: null,
   };
 
   // 1. Test mapping functions
@@ -86,6 +98,30 @@ export function runSearchIntegrationTests(): number {
     assertEqual(mappedDoc.actions[0].label, "Open TXT", "Primary action");
   });
 
+  const sampleFolder: SearchResultItem = {
+    id: "file:Projects",
+    category: "file",
+    name: "Projects",
+    subtitle: "D:\\",
+    path: "D:\\Projects",
+    location: "D:\\Projects",
+    icon: null,
+    thumbnail: null,
+    color: null,
+    isImage: false,
+    rightLabel: "Folder",
+    size: null,
+    version: null,
+  };
+
+  check(() => {
+    const mappedFolder = mapBackendFile(sampleFolder);
+    assertEqual(mappedFolder.name, "Projects", "Folder name");
+    assertEqual(mappedFolder.rightLabel, "Folder", "Right label is Folder");
+    assertEqual(mappedFolder.primaryLabel, "Open Folder", "Primary label is Open Folder");
+    assertEqual(mappedFolder.actions[0].label, "Open Folder", "Primary action is Open Folder");
+  });
+
   // 2. Test empty query suggestions from backend response
   check(() => {
     const mockResponse: SearchResponse = {
@@ -96,7 +132,7 @@ export function runSearchIntegrationTests(): number {
     assertEqual(sections[0].category, "app", "First section category");
     assertEqual(sections[0].title, "Suggestions", "First section title");
     assertEqual(sections[0].items[0].name, "Discord", "Suggested app name");
-    assertEqual(sections[1].category, "cmd", "Second section category");
+    assertEqual(sections.length, 1, "Only suggestions section when query is empty");
   });
 
   // 3. Test real query with search response
@@ -149,6 +185,17 @@ export function runSearchIntegrationTests(): number {
     const item = mapBackendApp(sampleApp);
     assertEqual(scoreItem(item, "disc") > 0, true, "Prefix match score > 0");
     assertEqual(scoreItem(item, "xyz"), 0, "No match score is 0");
+  });
+
+  // 8. Test enableFileSearch option
+  check(() => {
+    const mockResponse: SearchResponse = {
+      apps: [sampleApp],
+      files: [sampleDoc],
+    };
+    const sectionsWithFiles = buildSections("notes", mockResponse, { enableFileSearch: false });
+    const hasFiles = sectionsWithFiles.some((s) => s.category === "file");
+    assertEqual(hasFiles, false, "File section excluded when enableFileSearch is false");
   });
 
   return passed;

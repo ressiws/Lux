@@ -32,8 +32,11 @@ export interface LauncherItem {
   readonly thumbnail?: string;
   readonly calc?: CalcPreview;
   readonly path?: string;
+  readonly location?: string;
   readonly isImage?: boolean;
   readonly icon?: string;
+  readonly size?: string;
+  readonly version?: string;
 }
 
 export interface SearchResultItem {
@@ -42,10 +45,14 @@ export interface SearchResultItem {
   readonly name: string;
   readonly subtitle: string;
   readonly path: string;
+  readonly location: string;
   readonly icon: string | null;
+  readonly thumbnail: string | null;
   readonly color: string | null;
   readonly isImage: boolean;
   readonly rightLabel: string;
+  readonly size: string | null;
+  readonly version: string | null;
 }
 
 export interface SearchResponse {
@@ -75,3 +82,16 @@ export interface LauncherStatus {
   readonly shortcut: ShortcutStatus;
   readonly nativeGlassSupported: boolean;
 }
+
+export interface IndexingStatusPayload {
+  readonly isIndexing: boolean;
+  readonly totalApps: number;
+  readonly totalFiles: number;
+}
+
+export interface IndexStats {
+  readonly totalApps: number;
+  readonly totalFiles: number;
+  readonly isIndexed: boolean;
+}
+

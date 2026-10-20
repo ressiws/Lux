@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
-const MAX_DIR_DEPTH: usize = 3;
-const MAX_INDEXED_FILES: usize = 15000;
+const MAX_DIR_DEPTH: usize = 6;
+const MAX_INDEXED_FILES: usize = 50000;
 const MAX_RESULTS_PER_CATEGORY: usize = 8;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
@@ -20,6 +20,8 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     ".hg",
     ".cache",
     ".config",
+    ".idea",
+    ".vscode",
     "node_modules",
     "target",
     "build",
@@ -40,6 +42,15 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     "windows",
     "system volume information",
     "$recycle.bin",
+    "$windows.~bt",
+    "$windows.~ws",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "perflogs",
+    "inetpub",
+    "recovery",
+    "msocache",
 ];
 
 const EXCLUDED_APP_PATTERNS: &[&str] = &[
@@ -71,10 +82,14 @@ pub struct SearchResultItem {
     pub name: String,
     pub subtitle: String,
     pub path: String,
+    pub location: String,
     pub icon: Option<String>,
+    pub thumbnail: Option<String>,
     pub color: Option<String>,
     pub is_image: bool,
     pub right_label: String,
+    pub size: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,10 +97,13 @@ pub struct IndexedApp {
     pub name: String,
     pub subtitle: String,
     pub path: PathBuf,
+    pub location: String,
     pub exec: Option<String>,
     pub icon: Option<String>,
     pub color: String,
     pub keywords: String,
+    pub size: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,9 +111,12 @@ pub struct IndexedFile {
     pub name: String,
     pub subtitle: String,
     pub path: PathBuf,
+    pub location: String,
     pub is_image: bool,
     pub extension: String,
     pub right_label: String,
+    pub size: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Default)]
@@ -139,6 +160,654 @@ pub fn format_display_path(path: &Path, home_dir: Option<&Path>) -> String {
         return format!("~/{}", rel_str);
     }
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn to_base64(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len() * 4 / 3 + 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+pub fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    }
+}
+
+static ICON_CACHE: LazyLock<RwLock<HashMap<PathBuf, Option<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static THUMBNAIL_CACHE: LazyLock<RwLock<HashMap<PathBuf, Option<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static EXTENSION_ICON_CACHE: LazyLock<RwLock<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static FOLDER_ICON_CACHE: LazyLock<RwLock<Option<String>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+pub fn generate_image_thumbnail_base64(path: &Path, max_dim: u32) -> Option<String> {
+    let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let img = reader.decode().ok()?;
+    let thumb = img.thumbnail(max_dim, max_dim);
+    let mut png_bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut png_bytes);
+    thumb.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
+    Some(format!("data:image/png;base64,{}", to_base64(&png_bytes)))
+}
+
+pub fn get_or_generate_thumbnail(path: &Path) -> Option<String> {
+    if let Ok(guard) = THUMBNAIL_CACHE.read()
+        && let Some(cached) = guard.get(path)
+    {
+        return cached.clone();
+    }
+
+    let thumb = generate_image_thumbnail_base64(path, 128);
+
+    if let Ok(mut guard) = THUMBNAIL_CACHE.write() {
+        guard.insert(path.to_path_buf(), thumb.clone());
+    }
+
+    thumb
+}
+
+pub fn get_or_extract_icon(path: &Path) -> Option<String> {
+    if let Ok(guard) = ICON_CACHE.read()
+        && let Some(cached) = guard.get(path)
+    {
+        return cached.clone();
+    }
+
+    #[cfg(target_os = "windows")]
+    let extracted = extract_windows_icon_base64(path);
+
+    #[cfg(not(target_os = "windows"))]
+    let extracted = None;
+
+    if let Ok(mut guard) = ICON_CACHE.write() {
+        guard.insert(path.to_path_buf(), extracted.clone());
+    }
+
+    extracted
+}
+
+#[cfg(target_os = "windows")]
+#[allow(clippy::upper_case_acronyms)]
+mod win_icons {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[repr(C)]
+    pub struct SHFILEINFOW {
+        pub h_icon: *mut c_void,
+        pub i_icon: i32,
+        pub dw_attributes: u32,
+        pub sz_display_name: [u16; 260],
+        pub sz_type_name: [u16; 80],
+    }
+
+    #[repr(C)]
+    pub struct ICONINFO {
+        pub f_icon: i32,
+        pub x_hotspot: u32,
+        pub y_hotspot: u32,
+        pub hbm_mask: *mut c_void,
+        pub hbm_color: *mut c_void,
+    }
+
+    #[repr(C)]
+    pub struct BITMAP {
+        pub bm_type: i32,
+        pub bm_width: i32,
+        pub bm_height: i32,
+        pub bm_width_bytes: i32,
+        pub bm_planes: u16,
+        pub bm_bits_pixel: u16,
+        pub bm_bits: *mut c_void,
+    }
+
+    #[repr(C)]
+    pub struct BITMAPINFOHEADER {
+        pub bi_size: u32,
+        pub bi_width: i32,
+        pub bi_height: i32,
+        pub bi_planes: u16,
+        pub bi_bit_count: u16,
+        pub bi_compression: u32,
+        pub bi_size_image: u32,
+        pub bi_x_pels_per_meter: i32,
+        pub bi_y_pels_per_meter: i32,
+        pub bi_clr_used: u32,
+        pub bi_clr_important: u32,
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        pub fn SHGetFileInfoW(
+            psz_path: *const u16,
+            dw_file_attributes: u32,
+            psfi: *mut SHFILEINFOW,
+            cb_file_info: u32,
+            u_flags: u32,
+        ) -> usize;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        pub fn GetIconInfo(h_icon: *mut c_void, p_icon_info: *mut ICONINFO) -> i32;
+        pub fn DestroyIcon(h_icon: *mut c_void) -> i32;
+    }
+
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        pub fn GetObjectW(h: *mut c_void, c: i32, pv: *mut c_void) -> i32;
+        pub fn CreateCompatibleDC(hdc: *mut c_void) -> *mut c_void;
+        pub fn DeleteDC(hdc: *mut c_void) -> i32;
+        pub fn DeleteObject(ho: *mut c_void) -> i32;
+        pub fn GetDIBits(
+            hdc: *mut c_void,
+            hbm: *mut c_void,
+            start: u32,
+            c_lines: u32,
+            lpv_bits: *mut c_void,
+            lpbmi: *mut BITMAPINFOHEADER,
+            usage: u32,
+        ) -> i32;
+    }
+
+    pub const SHGFI_ICON: u32 = 0x000000100;
+    pub const SHGFI_LARGEICON: u32 = 0x000000000;
+    pub const SHGFI_USEFILEATTRIBUTES: u32 = 0x000000010;
+    pub const DIB_RGB_COLORS: u32 = 0;
+
+    pub unsafe fn hicon_to_base64_png(h_icon: *mut c_void) -> Option<String> {
+        let mut icon_info = unsafe { std::mem::zeroed::<ICONINFO>() };
+        if unsafe { GetIconInfo(h_icon, &mut icon_info) } == 0 {
+            unsafe {
+                let _ = DestroyIcon(h_icon);
+            }
+            return None;
+        }
+
+        let hbm = if !icon_info.hbm_color.is_null() {
+            icon_info.hbm_color
+        } else {
+            icon_info.hbm_mask
+        };
+
+        let mut bmp = unsafe { std::mem::zeroed::<BITMAP>() };
+        if unsafe { GetObjectW(hbm, std::mem::size_of::<BITMAP>() as i32, (&raw mut bmp).cast()) } == 0 {
+            unsafe {
+                if !icon_info.hbm_color.is_null() {
+                    let _ = DeleteObject(icon_info.hbm_color);
+                }
+                if !icon_info.hbm_mask.is_null() {
+                    let _ = DeleteObject(icon_info.hbm_mask);
+                }
+                let _ = DestroyIcon(h_icon);
+            }
+            return None;
+        }
+
+        let width = bmp.bm_width as u32;
+        let height = bmp.bm_height.unsigned_abs();
+        if width == 0 || height == 0 || width > 256 || height > 256 {
+            unsafe {
+                if !icon_info.hbm_color.is_null() {
+                    let _ = DeleteObject(icon_info.hbm_color);
+                }
+                if !icon_info.hbm_mask.is_null() {
+                    let _ = DeleteObject(icon_info.hbm_mask);
+                }
+                let _ = DestroyIcon(h_icon);
+            }
+            return None;
+        }
+
+        let hdc = unsafe { CreateCompatibleDC(std::ptr::null_mut()) };
+        let mut header = BITMAPINFOHEADER {
+            bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            bi_width: width as i32,
+            bi_height: -(height as i32), // negative for top-down
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: 0,
+            bi_size_image: width * height * 4,
+            bi_x_pels_per_meter: 0,
+            bi_y_pels_per_meter: 0,
+            bi_clr_used: 0,
+            bi_clr_important: 0,
+        };
+
+        let mut raw_pixels = vec![0u8; (width * height * 4) as usize];
+        let lines = unsafe {
+            GetDIBits(
+                hdc,
+                hbm,
+                0,
+                height,
+                raw_pixels.as_mut_ptr().cast(),
+                &mut header,
+                DIB_RGB_COLORS,
+            )
+        };
+
+        unsafe {
+            let _ = DeleteDC(hdc);
+            if !icon_info.hbm_color.is_null() {
+                let _ = DeleteObject(icon_info.hbm_color);
+            }
+            if !icon_info.hbm_mask.is_null() {
+                let _ = DeleteObject(icon_info.hbm_mask);
+            }
+            let _ = DestroyIcon(h_icon);
+        }
+
+        if lines == 0 {
+            return None;
+        }
+
+        // Convert BGRA to RGBA
+        let mut has_alpha = false;
+        for chunk in raw_pixels.chunks_exact_mut(4) {
+            let b = chunk[0];
+            let r = chunk[2];
+            chunk[0] = r;
+            chunk[2] = b;
+            if chunk[3] > 0 {
+                has_alpha = true;
+            }
+        }
+
+        if !has_alpha {
+            for chunk in raw_pixels.chunks_exact_mut(4) {
+                chunk[3] = 255;
+            }
+        }
+
+        let img = image::RgbaImage::from_raw(width, height, raw_pixels)?;
+        let mut png_bytes = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut png_bytes);
+        img.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
+
+        Some(format!("data:image/png;base64,{}", super::to_base64(&png_bytes)))
+    }
+
+    pub fn extract_windows_icon_base64(path: &Path) -> Option<String> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            let mut shfi = std::mem::zeroed::<SHFILEINFOW>();
+            let res = SHGetFileInfoW(
+                wide.as_ptr(),
+                0,
+                &mut shfi,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            );
+            if res == 0 || shfi.h_icon.is_null() {
+                return None;
+            }
+            hicon_to_base64_png(shfi.h_icon)
+        }
+    }
+
+    pub fn extract_shell_icon_attributes(dummy_name: &str, file_attributes: u32) -> Option<String> {
+        let wide: Vec<u16> = std::ffi::OsStr::new(dummy_name)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        unsafe {
+            let mut shfi = std::mem::zeroed::<SHFILEINFOW>();
+            let res = SHGetFileInfoW(
+                wide.as_ptr(),
+                file_attributes,
+                &mut shfi,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES,
+            );
+            if res == 0 || shfi.h_icon.is_null() {
+                return None;
+            }
+            hicon_to_base64_png(shfi.h_icon)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn extract_windows_icon_base64(path: &Path) -> Option<String> {
+    win_icons::extract_windows_icon_base64(path)
+}
+
+#[cfg(target_os = "windows")]
+pub fn extract_shell_icon_attributes(dummy_name: &str, file_attributes: u32) -> Option<String> {
+    win_icons::extract_shell_icon_attributes(dummy_name, file_attributes)
+}
+
+pub fn get_folder_icon() -> Option<String> {
+    if let Ok(guard) = FOLDER_ICON_CACHE.read()
+        && guard.is_some()
+    {
+        return guard.clone();
+    }
+
+    #[cfg(target_os = "windows")]
+    let icon = extract_shell_icon_attributes("folder", 0x00000010 /* FILE_ATTRIBUTE_DIRECTORY */);
+
+    #[cfg(not(target_os = "windows"))]
+    let icon = None;
+
+    if let Ok(mut guard) = FOLDER_ICON_CACHE.write() {
+        *guard = icon.clone();
+    }
+    icon
+}
+
+pub fn get_file_type_icon(ext: &str) -> Option<String> {
+    let lower = ext.to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+
+    if let Ok(guard) = EXTENSION_ICON_CACHE.read()
+        && let Some(cached) = guard.get(&lower)
+    {
+        return cached.clone();
+    }
+
+    #[cfg(target_os = "windows")]
+    let icon = {
+        let dummy = format!("dummy.{}", lower);
+        extract_shell_icon_attributes(&dummy, 0x00000080 /* FILE_ATTRIBUTE_NORMAL */)
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let icon = None;
+
+    if let Ok(mut guard) = EXTENSION_ICON_CACHE.write() {
+        guard.insert(lower, icon.clone());
+    }
+    icon
+}
+
+#[cfg(target_os = "windows")]
+#[allow(clippy::upper_case_acronyms)]
+pub fn resolve_lnk_target(lnk_path: &Path) -> Option<PathBuf> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct GUID {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    const CLSID_SHELL_LINK: GUID = GUID {
+        data1: 0x00021401,
+        data2: 0x0000,
+        data3: 0x0000,
+        data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+    };
+
+    const IID_ISHELL_LINK_W: GUID = GUID {
+        data1: 0x000214F9,
+        data2: 0x0000,
+        data3: 0x0000,
+        data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+    };
+
+    const IID_IPERSIST_FILE: GUID = GUID {
+        data1: 0x0000010b,
+        data2: 0x0000,
+        data3: 0x0000,
+        data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+    };
+
+    #[repr(C)]
+    struct IShellLinkWVtbl {
+        query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+        add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+        release: unsafe extern "system" fn(*mut c_void) -> u32,
+        get_path: unsafe extern "system" fn(*mut c_void, *mut u16, i32, *mut c_void, u32) -> i32,
+    }
+
+    #[repr(C)]
+    struct IPersistFileVtbl {
+        query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+        add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+        release: unsafe extern "system" fn(*mut c_void) -> u32,
+        get_class_id: unsafe extern "system" fn(*mut c_void, *mut GUID) -> i32,
+        is_dirty: unsafe extern "system" fn(*mut c_void) -> i32,
+        load: unsafe extern "system" fn(*mut c_void, *const u16, u32) -> i32,
+    }
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(pv_reserved: *mut c_void, dw_co_init: u32) -> i32;
+        fn CoCreateInstance(
+            rclsid: *const GUID,
+            p_unk_outer: *mut c_void,
+            dw_cls_context: u32,
+            riid: *const GUID,
+            ppv: *mut *mut c_void,
+        ) -> i32;
+    }
+
+    unsafe {
+        let _ = CoInitializeEx(std::ptr::null_mut(), 0);
+
+        let mut shell_link: *mut c_void = std::ptr::null_mut();
+        if CoCreateInstance(
+            &CLSID_SHELL_LINK,
+            std::ptr::null_mut(),
+            1,
+            &IID_ISHELL_LINK_W,
+            &mut shell_link,
+        ) != 0 || shell_link.is_null() {
+            return None;
+        }
+
+        let link_vtbl = &**(shell_link as *mut *mut IShellLinkWVtbl);
+        let mut persist_file: *mut c_void = std::ptr::null_mut();
+        if (link_vtbl.query_interface)(shell_link, &IID_IPERSIST_FILE, &mut persist_file) != 0
+            || persist_file.is_null()
+        {
+            let _ = (link_vtbl.release)(shell_link);
+            return None;
+        }
+
+        let persist_vtbl = &**(persist_file as *mut *mut IPersistFileVtbl);
+        let wide_path: Vec<u16> = lnk_path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let load_res = (persist_vtbl.load)(persist_file, wide_path.as_ptr(), 0);
+        let _ = (persist_vtbl.release)(persist_file);
+
+        if load_res != 0 {
+            let _ = (link_vtbl.release)(shell_link);
+            return None;
+        }
+
+        let mut target_buf = [0u16; 1024];
+        let get_res = (link_vtbl.get_path)(
+            shell_link,
+            target_buf.as_mut_ptr(),
+            target_buf.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
+        let _ = (link_vtbl.release)(shell_link);
+
+        if get_res == 0 {
+            let len = target_buf.iter().position(|&c| c == 0).unwrap_or(0);
+            if len > 0 {
+                let s = String::from_utf16_lossy(&target_buf[..len]);
+                let p = PathBuf::from(s);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_pe_file_version(path: &Path) -> Option<String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "version")]
+    unsafe extern "system" {
+        fn GetFileVersionInfoSizeW(lptstr_filename: *const u16, lpdw_handle: *mut u32) -> u32;
+        fn GetFileVersionInfoW(
+            lptstr_filename: *const u16,
+            dw_handle: u32,
+            dw_len: u32,
+            lp_data: *mut c_void,
+        ) -> i32;
+        fn VerQueryValueW(
+            p_block: *const c_void,
+            lp_sub_block: *const u16,
+            lplp_buffer: *mut *mut c_void,
+            pu_len: *mut u32,
+        ) -> i32;
+    }
+
+    #[repr(C)]
+    struct VS_FIXEDFILEINFO {
+        dw_signature: u32,
+        dw_struc_version: u32,
+        dw_file_version_ms: u32,
+        dw_file_version_ls: u32,
+        dw_product_version_ms: u32,
+        dw_product_version_ls: u32,
+        dw_file_flags_mask: u32,
+        dw_file_flags: u32,
+        dw_file_os: u32,
+        dw_file_type: u32,
+        dw_file_subtype: u32,
+        dw_file_date_ms: u32,
+        dw_file_date_ls: u32,
+    }
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        let mut handle = 0u32;
+        let size = GetFileVersionInfoSizeW(wide.as_ptr(), &mut handle);
+        if size == 0 {
+            return None;
+        }
+
+        let mut data = vec![0u8; size as usize];
+        if GetFileVersionInfoW(wide.as_ptr(), handle, size, data.as_mut_ptr().cast()) == 0 {
+            return None;
+        }
+
+        let sub_block: Vec<u16> = "\\\0".encode_utf16().collect();
+        let mut buffer: *mut c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+
+        if VerQueryValueW(
+            data.as_ptr().cast(),
+            sub_block.as_ptr(),
+            &mut buffer,
+            &mut len,
+        ) != 0
+            && !buffer.is_null()
+            && len as usize >= std::mem::size_of::<VS_FIXEDFILEINFO>()
+        {
+            let info = &*(buffer as *const VS_FIXEDFILEINFO);
+            let major = (info.dw_file_version_ms >> 16) & 0xffff;
+            let minor = info.dw_file_version_ms & 0xffff;
+            let patch = (info.dw_file_version_ls >> 16) & 0xffff;
+            let build = info.dw_file_version_ls & 0xffff;
+            if build > 0 {
+                return Some(format!("{major}.{minor}.{patch}.{build}"));
+            } else {
+                return Some(format!("{major}.{minor}.{patch}"));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_or_resolve_linux_icon(app: &IndexedApp) -> Option<String> {
+    if let Some(ref icon_name) = app.icon {
+        if let Ok(guard) = ICON_CACHE.read()
+            && let Some(cached) = guard.get(&app.path)
+        {
+            return cached.clone();
+        }
+
+        let icon_path = Path::new(icon_name);
+        let data = if icon_path.is_absolute() && icon_path.exists() {
+            load_image_or_svg_base64(icon_path)
+        } else {
+            let candidates = [
+                format!("/usr/share/pixmaps/{icon_name}.png"),
+                format!("/usr/share/pixmaps/{icon_name}.svg"),
+                format!("/usr/share/icons/hicolor/48x48/apps/{icon_name}.png"),
+                format!("/usr/share/icons/hicolor/scalable/apps/{icon_name}.svg"),
+                format!("/usr/share/icons/hicolor/32x32/apps/{icon_name}.png"),
+            ];
+            candidates
+                .iter()
+                .map(Path::new)
+                .find(|p| p.exists())
+                .and_then(load_image_or_svg_base64)
+        };
+
+        if let Ok(mut guard) = ICON_CACHE.write() {
+            guard.insert(app.path.clone(), data.clone());
+        }
+
+        data
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_image_or_svg_base64(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    if ext == "svg" {
+        Some(format!("data:image/svg+xml;base64,{}", to_base64(&bytes)))
+    } else if ext == "png" {
+        Some(format!("data:image/png;base64,{}", to_base64(&bytes)))
+    } else {
+        None
+    }
 }
 
 fn assign_app_color(name: &str) -> String {
@@ -224,7 +893,6 @@ fn walk_directory_files(
     dir: &Path,
     current_depth: usize,
     max_depth: usize,
-    home_dir: Option<&Path>,
     indexed_files: &mut Vec<IndexedFile>,
 ) {
     if current_depth > max_depth || indexed_files.len() >= MAX_INDEXED_FILES {
@@ -246,6 +914,10 @@ fn walk_directory_files(
             Err(_) => continue,
         };
 
+        if file_type.is_symlink() {
+            continue;
+        }
+
         let file_name = entry.file_name();
         let name_str = file_name.to_string_lossy();
 
@@ -260,11 +932,32 @@ fn walk_directory_files(
             if IGNORED_DIR_NAMES.contains(&lower_name.as_str()) {
                 continue;
             }
+
+            let folder_parent = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Folder".to_string());
+
+            let location = path.to_string_lossy().to_string();
+            let icon = get_folder_icon();
+
+            indexed_files.push(IndexedFile {
+                name: name_str.to_string(),
+                subtitle: folder_parent,
+                path: path.clone(),
+                location,
+                is_image: false,
+                extension: String::new(),
+                right_label: "Folder".to_string(),
+                size: None,
+                icon,
+            });
+
             walk_directory_files(
                 &path,
                 current_depth + 1,
                 max_depth,
-                home_dir,
                 indexed_files,
             );
         } else if file_type.is_file() {
@@ -282,15 +975,29 @@ fn walk_directory_files(
                 "File".to_string()
             };
 
-            let subtitle = format_display_path(&path, home_dir);
+            let folder_name = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Files".to_string());
+
+            let location = path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            let size = entry.metadata().ok().map(|m| format_file_size(m.len()));
+            let icon = get_file_type_icon(&ext);
 
             indexed_files.push(IndexedFile {
                 name: name_str.to_string(),
-                subtitle,
+                subtitle: folder_name,
                 path,
+                location,
                 is_image,
                 extension: ext,
                 right_label,
+                size,
+                icon,
             });
         }
     }
@@ -307,26 +1014,135 @@ pub fn get_user_home_dir() -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn get_available_windows_drives() -> Vec<PathBuf> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLogicalDrives() -> u32;
+        fn GetDriveTypeW(lp_root_path_name: *const u16) -> u32;
+    }
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
+
+    let mut drives = Vec::new();
+    unsafe {
+        let bitmask = GetLogicalDrives();
+        for i in 0..26 {
+            if (bitmask & (1 << i)) != 0 {
+                let letter = (b'A' + i as u8) as char;
+                let root_str = format!("{}:\\", letter);
+                let wide: Vec<u16> = root_str.encode_utf16().chain(Some(0)).collect();
+                let drive_type = GetDriveTypeW(wide.as_ptr());
+                if drive_type == DRIVE_FIXED || drive_type == DRIVE_REMOVABLE {
+                    drives.push(PathBuf::from(root_str));
+                }
+            }
+        }
+    }
+    if drives.is_empty() {
+        drives.push(PathBuf::from("C:\\"));
+    }
+    drives
+}
+
 pub fn get_user_search_directories(home_dir: &Option<PathBuf>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut add_dir = |p: PathBuf| {
+        let norm = p.to_string_lossy().to_lowercase();
+        if p.is_dir() && seen.insert(norm) {
+            dirs.push(p);
+        }
+    };
 
     if let Some(home) = home_dir {
-        let desktop = home.join("Desktop");
-        let documents = home.join("Documents");
-        let downloads = home.join("Downloads");
-        let pictures = home.join("Pictures");
+        add_dir(home.join("Desktop"));
+        add_dir(home.join("Documents"));
+        add_dir(home.join("Downloads"));
+        add_dir(home.join("Pictures"));
+        add_dir(home.join("Projects"));
+        add_dir(home.join("projects"));
+        add_dir(home.join("source"));
+        add_dir(home.join("repos"));
+        add_dir(home.join("dev"));
+        add_dir(home.join("Work"));
+    }
 
-        if desktop.exists() {
-            dirs.push(desktop);
+    #[cfg(target_os = "windows")]
+    {
+        let available_drives = get_available_windows_drives();
+
+        // 1. Check common user folders on all drives first (e.g. D:\projects, C:\projects, etc.)
+        for drive in &available_drives {
+            let candidates = [
+                "projects",
+                "Projects",
+                "Documents",
+                "Downloads",
+                "Pictures",
+                "Desktop",
+                "Work",
+                "Media",
+                "Files",
+                "Data",
+                "dev",
+                "source",
+                "repos",
+            ];
+            for cand in candidates {
+                add_dir(drive.join(cand));
+            }
         }
-        if documents.exists() {
-            dirs.push(documents);
+
+        // 2. Sort drives so non-system drives (D:\, etc.) are indexed before C:\ root
+        let mut sorted_drives = available_drives.clone();
+        sorted_drives.sort_by_key(|d| {
+            let s = d.to_string_lossy().to_uppercase();
+            if s.starts_with("C:") { 1 } else { 0 }
+        });
+
+        for drive in sorted_drives {
+            if let Ok(entries) = fs::read_dir(&drive) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy().to_lowercase();
+                        if !name_str.starts_with('$')
+                            && !name_str.starts_with('.')
+                            && !IGNORED_DIR_NAMES.contains(&name_str.as_str())
+                        {
+                            add_dir(path);
+                        }
+                    }
+                }
+            }
         }
-        if downloads.exists() {
-            dirs.push(downloads);
-        }
-        if pictures.exists() {
-            dirs.push(pictures);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Linux: check /media/$USER, /run/media/$USER, and /mnt
+        if let Some(user) = std::env::var_os("USER") {
+            let media = PathBuf::from("/media").join(&user);
+            if let Ok(entries) = fs::read_dir(&media) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        add_dir(path);
+                    }
+                }
+            }
+            let run_media = PathBuf::from("/run/media").join(&user);
+            if let Ok(entries) = fs::read_dir(&run_media) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        add_dir(path);
+                    }
+                }
+            }
         }
     }
 
@@ -334,7 +1150,7 @@ pub fn get_user_search_directories(home_dir: &Option<PathBuf>) -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn scan_windows_start_menu_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
+fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
     let mut apps = Vec::new();
     let mut seen_names = HashSet::new();
 
@@ -354,7 +1170,6 @@ fn scan_windows_start_menu_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
     fn walk_shortcuts(
         dir: &Path,
         depth: usize,
-        home_dir: Option<&Path>,
         seen_names: &mut HashSet<String>,
         apps: &mut Vec<IndexedApp>,
     ) {
@@ -377,7 +1192,7 @@ fn scan_windows_start_menu_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
             if file_type.is_dir() {
                 let lower = name_str.to_lowercase();
                 if !IGNORED_DIR_NAMES.contains(&lower.as_str()) {
-                    walk_shortcuts(&path, depth + 1, home_dir, seen_names, apps);
+                    walk_shortcuts(&path, depth + 1, seen_names, apps);
                 }
             } else if file_type.is_file()
                 && let Some(ext) = path.extension()
@@ -395,15 +1210,19 @@ fn scan_windows_start_menu_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
                 let norm_name = stem.to_lowercase();
                 if seen_names.insert(norm_name) {
                     let color = assign_app_color(&stem);
-                    let subtitle = format_display_path(&path, home_dir);
+                    let subtitle = "Application".to_string();
+                    let (icon, location, size, version) = resolve_app_metadata(&path, None, None);
                     apps.push(IndexedApp {
                         name: stem,
                         subtitle,
                         path,
+                        location,
                         exec: None,
-                        icon: None,
+                        icon,
                         color,
                         keywords: String::new(),
+                        size,
+                        version,
                     });
                 }
             }
@@ -412,7 +1231,7 @@ fn scan_windows_start_menu_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
 
     for root in start_menu_roots {
         if root.exists() {
-            walk_shortcuts(&root, 0, home_dir, &mut seen_names, &mut apps);
+            walk_shortcuts(&root, 0, &mut seen_names, &mut apps);
         }
     }
 
@@ -458,7 +1277,7 @@ fn scan_linux_desktop_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
                 }
 
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(app) = parse_desktop_entry(&path, &content, home_dir) {
+                    if let Some(app) = parse_desktop_entry(&path, &content) {
                         let norm = app.name.to_lowercase();
                         if seen_ids.insert(norm) {
                             apps.push(app);
@@ -474,7 +1293,7 @@ fn scan_linux_desktop_apps(home_dir: Option<&Path>) -> Vec<IndexedApp> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn parse_desktop_entry(path: &Path, content: &str, home_dir: Option<&Path>) -> Option<IndexedApp> {
+fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
     let mut in_desktop_entry = false;
     let mut name: Option<String> = None;
     let mut comment: Option<String> = None;
@@ -517,16 +1336,21 @@ fn parse_desktop_entry(path: &Path, content: &str, home_dir: Option<&Path>) -> O
 
     let app_name = name?;
     let color = assign_app_color(&app_name);
-    let subtitle = comment.unwrap_or_else(|| format_display_path(path, home_dir));
+    let subtitle = comment.unwrap_or_else(|| "Application".to_string());
+    let (resolved_icon, location, size, version) =
+        resolve_app_metadata(path, exec.as_deref(), icon.as_deref());
 
     Some(IndexedApp {
         name: app_name,
         subtitle,
         path: path.to_path_buf(),
+        location,
         exec,
-        icon,
+        icon: resolved_icon,
         color,
         keywords: String::new(),
+        size,
+        version,
     })
 }
 
@@ -534,7 +1358,7 @@ pub fn build_full_search_index() -> SearchIndex {
     let home_dir = get_user_home_dir();
 
     #[cfg(target_os = "windows")]
-    let apps = scan_windows_start_menu_apps(home_dir.as_deref());
+    let apps = scan_windows_start_menu_apps();
 
     #[cfg(not(target_os = "windows"))]
     let apps = scan_linux_desktop_apps(home_dir.as_deref());
@@ -547,7 +1371,6 @@ pub fn build_full_search_index() -> SearchIndex {
             &root,
             0,
             MAX_DIR_DEPTH,
-            home_dir.as_deref(),
             &mut files,
         );
     }
@@ -556,6 +1379,95 @@ pub fn build_full_search_index() -> SearchIndex {
         apps,
         files,
         is_indexed: true,
+    }
+}
+
+fn resolve_app_metadata(
+    path: &Path,
+    exec: Option<&str>,
+    icon_name: Option<&str>,
+) -> (Option<String>, String, Option<String>, Option<String>) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = exec;
+        let _ = icon_name;
+        let target = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
+            resolve_lnk_target(path).unwrap_or_else(|| path.to_path_buf())
+        } else {
+            path.to_path_buf()
+        };
+
+        let location = target.to_string_lossy().to_string();
+        let icon = get_or_extract_icon(path).or_else(|| get_or_extract_icon(&target));
+        let size = fs::metadata(&target)
+            .or_else(|_| fs::metadata(path))
+            .ok()
+            .map(|m| format_file_size(m.len()));
+        let version = get_pe_file_version(&target);
+
+        (icon, location, size, version)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let location = exec.map(|s| s.to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+        let icon = icon_name.and_then(|name| {
+            let p = Path::new(name);
+            if p.is_absolute() && p.exists() {
+                load_image_or_svg_base64(p)
+            } else {
+                let candidates = [
+                    format!("/usr/share/pixmaps/{name}.png"),
+                    format!("/usr/share/pixmaps/{name}.svg"),
+                    format!("/usr/share/icons/hicolor/48x48/apps/{name}.png"),
+                    format!("/usr/share/icons/hicolor/scalable/apps/{name}.svg"),
+                    format!("/usr/share/icons/hicolor/32x32/apps/{name}.png"),
+                ];
+                candidates
+                    .iter()
+                    .map(Path::new)
+                    .find(|p| p.exists())
+                    .and_then(load_image_or_svg_base64)
+            }
+        });
+        let size = fs::metadata(path).ok().map(|m| format_file_size(m.len()));
+        (icon, location, size, None)
+    }
+}
+
+fn build_app_search_result(app: &IndexedApp) -> SearchResultItem {
+    SearchResultItem {
+        id: format!("app:{}", app.path.to_string_lossy()),
+        category: "app".to_string(),
+        name: app.name.clone(),
+        subtitle: app.subtitle.clone(),
+        path: app.path.to_string_lossy().to_string(),
+        location: app.location.clone(),
+        icon: app.icon.clone(),
+        thumbnail: None,
+        color: Some(app.color.clone()),
+        is_image: false,
+        right_label: "Application".to_string(),
+        size: app.size.clone(),
+        version: app.version.clone(),
+    }
+}
+
+fn build_file_search_result(file: &IndexedFile) -> SearchResultItem {
+    SearchResultItem {
+        id: format!("file:{}", file.path.to_string_lossy()),
+        category: "file".to_string(),
+        name: file.name.clone(),
+        subtitle: file.subtitle.clone(),
+        path: file.path.to_string_lossy().to_string(),
+        location: file.location.clone(),
+        icon: file.icon.clone(),
+        thumbnail: None,
+        color: None,
+        is_image: file.is_image,
+        right_label: file.right_label.clone(),
+        size: file.size.clone(),
+        version: None,
     }
 }
 
@@ -570,17 +1482,7 @@ pub fn search_index(
             .apps
             .iter()
             .take(3)
-            .map(|app| SearchResultItem {
-                id: format!("app:{}", app.path.to_string_lossy()),
-                category: "app".to_string(),
-                name: app.name.clone(),
-                subtitle: app.subtitle.clone(),
-                path: app.path.to_string_lossy().to_string(),
-                icon: app.icon.clone(),
-                color: Some(app.color.clone()),
-                is_image: false,
-                right_label: "Application".to_string(),
-            })
+            .map(build_app_search_result)
             .collect();
 
         return (app_suggestions, Vec::new());
@@ -609,25 +1511,27 @@ pub fn search_index(
     let app_results: Vec<SearchResultItem> = matched_apps
         .into_iter()
         .take(MAX_RESULTS_PER_CATEGORY)
-        .map(|(_, app)| SearchResultItem {
-            id: format!("app:{}", app.path.to_string_lossy()),
-            category: "app".to_string(),
-            name: app.name.clone(),
-            subtitle: app.subtitle.clone(),
-            path: app.path.to_string_lossy().to_string(),
-            icon: app.icon.clone(),
-            color: Some(app.color.clone()),
-            is_image: false,
-            right_label: "Application".to_string(),
-        })
+        .map(|(_, app)| build_app_search_result(app))
         .collect();
 
-    // Search files
+    // Search files and folders
     let mut matched_files: Vec<(u32, &IndexedFile)> = index
         .files
         .iter()
         .filter_map(|file| {
-            let score = score_match(&file.name, "", trimmed);
+            let mut score = score_match(&file.name, &file.subtitle, trimmed);
+
+            // Allow path-fragment matches (e.g. "projects/lux" or "lux\page")
+            if trimmed.contains('/') || trimmed.contains('\\') {
+                let query_norm = trimmed.replace('\\', "/").to_lowercase();
+                let path_norm = file.path.to_string_lossy().replace('\\', "/").to_lowercase();
+                if path_norm.ends_with(&query_norm) {
+                    score = score.max(90);
+                } else if path_norm.contains(&query_norm) {
+                    score = score.max(45);
+                }
+            }
+
             if score > 0 {
                 Some((score, file))
             } else {
@@ -645,17 +1549,7 @@ pub fn search_index(
     let file_results: Vec<SearchResultItem> = matched_files
         .into_iter()
         .take(MAX_RESULTS_PER_CATEGORY)
-        .map(|(_, file)| SearchResultItem {
-            id: format!("file:{}", file.path.to_string_lossy()),
-            category: "file".to_string(),
-            name: file.name.clone(),
-            subtitle: file.subtitle.clone(),
-            path: file.path.to_string_lossy().to_string(),
-            icon: None,
-            color: None,
-            is_image: file.is_image,
-            right_label: file.right_label.clone(),
-        })
+        .map(|(_, file)| build_file_search_result(file))
         .collect();
 
     (app_results, file_results)
@@ -788,14 +1682,47 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexingStatusPayload {
+    pub is_indexing: bool,
+    pub total_apps: usize,
+    pub total_files: usize,
+}
+
+pub const EVENT_INDEXING_STATUS: &str = "lux://indexing-status";
+
 pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
     std::thread::spawn(move || {
+        use tauri::Emitter;
+
+        let _ = app_handle.emit(
+            EVENT_INDEXING_STATUS,
+            IndexingStatusPayload {
+                is_indexing: true,
+                total_apps: 0,
+                total_files: 0,
+            },
+        );
+
         let index = build_full_search_index();
+        let total_apps = index.apps.len();
+        let total_files = index.files.len();
+
         if let Some(state) = app_handle.try_state::<SearchState>()
             && let Ok(mut lock) = state.index.write()
         {
             *lock = index;
         }
+
+        let _ = app_handle.emit(
+            EVENT_INDEXING_STATUS,
+            IndexingStatusPayload {
+                is_indexing: false,
+                total_apps,
+                total_files,
+            },
+        );
     });
 }
 
@@ -862,19 +1789,25 @@ mod tests {
                     name: "Firefox".to_string(),
                     subtitle: "~/Start Menu/Firefox".to_string(),
                     path: PathBuf::from("C:/Firefox.lnk"),
+                    location: "C:\\Program Files\\Mozilla Firefox\\firefox.exe".to_string(),
                     exec: None,
                     icon: None,
                     color: "#e8663d".to_string(),
                     keywords: "browser web".to_string(),
+                    size: Some("120 MB".to_string()),
+                    version: Some("130.0.0".to_string()),
                 },
                 IndexedApp {
                     name: "Discord".to_string(),
                     subtitle: "~/Start Menu/Discord".to_string(),
                     path: PathBuf::from("C:/Discord.lnk"),
+                    location: "C:\\Users\\tester\\AppData\\Local\\Discord\\app.exe".to_string(),
                     exec: None,
                     icon: None,
                     color: "#5865f2".to_string(),
                     keywords: "chat voice".to_string(),
+                    size: Some("85 MB".to_string()),
+                    version: Some("1.0.9".to_string()),
                 },
             ],
             files: vec![
@@ -882,17 +1815,45 @@ mod tests {
                     name: "wedding-photo.jpg".to_string(),
                     subtitle: "~/Pictures/wedding-photo.jpg".to_string(),
                     path: PathBuf::from("C:/Users/tester/Pictures/wedding-photo.jpg"),
+                    location: "C:\\Users\\tester\\Pictures".to_string(),
                     is_image: true,
                     extension: "jpg".to_string(),
                     right_label: "Image".to_string(),
+                    size: Some("4.2 MB".to_string()),
+                    icon: None,
                 },
                 IndexedFile {
                     name: "contract.pdf".to_string(),
                     subtitle: "~/Documents/contract.pdf".to_string(),
                     path: PathBuf::from("C:/Users/tester/Documents/contract.pdf"),
+                    location: "C:\\Users\\tester\\Documents".to_string(),
                     is_image: false,
                     extension: "pdf".to_string(),
                     right_label: "PDF".to_string(),
+                    size: Some("250 KB".to_string()),
+                    icon: None,
+                },
+                IndexedFile {
+                    name: "Projects".to_string(),
+                    subtitle: "D:\\".to_string(),
+                    path: PathBuf::from("D:/Projects"),
+                    location: "D:\\Projects".to_string(),
+                    is_image: false,
+                    extension: String::new(),
+                    right_label: "Folder".to_string(),
+                    size: None,
+                    icon: None,
+                },
+                IndexedFile {
+                    name: "page.svelte".to_string(),
+                    subtitle: "routes".to_string(),
+                    path: PathBuf::from("D:/projects/Lux/app/src/routes/page.svelte"),
+                    location: "D:\\projects\\Lux\\app\\src\\routes".to_string(),
+                    is_image: false,
+                    extension: "svelte".to_string(),
+                    right_label: "SVELTE".to_string(),
+                    size: Some("12 KB".to_string()),
+                    icon: None,
                 },
             ],
             is_indexed: true,
@@ -908,6 +1869,23 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "wedding-photo.jpg");
         assert!(files[0].is_image);
+
+        // Test folder search
+        let (_apps, files) = search_index(&index, "projects");
+        assert!(!files.is_empty());
+        assert_eq!(files[0].name, "Projects");
+        assert_eq!(files[0].right_label, "Folder");
+
+        // Test path fragment search
+        let (_apps, files) = search_index(&index, "routes/page");
+        assert!(!files.is_empty());
+        assert_eq!(files[0].name, "page.svelte");
+
+        // Test nested D:\projects files
+        let (_apps, files) = search_index(&index, "page");
+        assert!(!files.is_empty());
+        assert_eq!(files[0].name, "page.svelte");
+        assert_eq!(files[0].right_label, "SVELTE");
     }
 
     #[test]

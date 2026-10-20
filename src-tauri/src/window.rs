@@ -108,32 +108,25 @@ impl LauncherState {
 mod win32_backdrop {
     use std::ffi::c_void;
 
+    #[repr(C)]
+    struct Margins {
+        cx_left_width: i32,
+        cx_right_width: i32,
+        cy_top_height: i32,
+        cy_bottom_height: i32,
+    }
+
+    const DWMWA_NCRENDERING_POLICY: u32 = 2;
+    const DWMNCRP_DISABLED: u32 = 1;
+
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
     const DWMWA_BORDER_COLOR: u32 = 34;
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 
-    const DWMWCP_ROUND: u32 = 2;
+    const DWMWCP_DONOTROUND: u32 = 1;
     const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
     const DWMSBT_NONE: u32 = 1;
-
-    const WCA_ACCENT_POLICY: u32 = 19;
-    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
-
-    #[repr(C)]
-    struct AccentPolicy {
-        accent_state: u32,
-        accent_flags: u32,
-        gradient_color: u32,
-        animation_id: u32,
-    }
-
-    #[repr(C)]
-    struct WindowCompositionAttribData {
-        attrib: u32,
-        pv_data: *mut c_void,
-        cb_data: usize,
-    }
 
     #[link(name = "dwmapi")]
     unsafe extern "system" {
@@ -143,16 +136,8 @@ mod win32_backdrop {
             pv_attribute: *const c_void,
             cb_attribute: u32,
         ) -> i32;
+        fn DwmExtendFrameIntoClientArea(hwnd: *mut c_void, p_mar_inset: *const Margins) -> i32;
     }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetModuleHandleA(lp_module_name: *const i8) -> *mut c_void;
-        fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const i8) -> *mut c_void;
-    }
-
-    type SetWindowCompositionAttributeFn =
-        unsafe extern "system" fn(*mut c_void, *mut WindowCompositionAttribData) -> i32;
 
     unsafe fn set_dwm_u32(hwnd: *mut c_void, attr: u32, value: u32) -> i32 {
         unsafe {
@@ -165,42 +150,23 @@ mod win32_backdrop {
         }
     }
 
-    pub fn apply_translucent_acrylic(hwnd: *mut c_void, r: u8, g: u8, b: u8, a: u8) -> bool {
-        let alpha = a.max(1);
-        let gradient_color = (r as u32)
-            | ((g as u32) << 8)
-            | ((b as u32) << 16)
-            | ((alpha as u32) << 24);
-
-        let mut policy = AccentPolicy {
-            accent_state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
-            accent_flags: 0,
-            gradient_color,
-            animation_id: 0,
-        };
-
-        let mut data = WindowCompositionAttribData {
-            attrib: WCA_ACCENT_POLICY,
-            pv_data: (&raw mut policy).cast::<c_void>(),
-            cb_data: std::mem::size_of::<AccentPolicy>(),
-        };
-
+    pub fn configure_window_frame(hwnd: *mut c_void) {
         unsafe {
             let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
-            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
+            let _ = set_dwm_u32(hwnd, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED);
+            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
             let _ = set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
             let _ = set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
 
-            let user32 = GetModuleHandleA(c"user32.dll".as_ptr());
-            if user32.is_null() {
-                return false;
-            }
-            let proc_addr = GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr());
-            if proc_addr.is_null() {
-                return false;
-            }
-            let set_wca: SetWindowCompositionAttributeFn = std::mem::transmute(proc_addr);
-            set_wca(hwnd, &raw mut data) != 0
+            let margins = Margins {
+                cx_left_width: -1,
+                cx_right_width: -1,
+                cy_top_height: -1,
+                cy_bottom_height: -1,
+            };
+            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+            strip_native_frame(hwnd);
         }
     }
 
@@ -258,41 +224,80 @@ mod win32_backdrop {
 
 pub fn configure_native_backdrop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     #[cfg(target_os = "windows")]
-    {
-        if let Ok(hwnd) = window.hwnd() {
-            win32_backdrop::strip_native_frame(hwnd.0);
-            if win32_backdrop::apply_translucent_acrylic(hwnd.0, 16, 16, 20, 65) {
-                return true;
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
+    }
+    let _ = window;
+    false
+}
+
+pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Result<(), String> {
+    Ok(())
+}
+
+pub const LAUNCHER_WIDTH: f64 = 760.0;
+pub const LAUNCHER_HEIGHT_IDLE: f64 = 144.0;
+pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
+
+static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    let target_height = if expanded {
+        LAUNCHER_HEIGHT_EXPANDED
+    } else {
+        LAUNCHER_HEIGHT_IDLE
+    };
+
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let current_physical = window.outer_size().map_err(|e| e.to_string())?;
+    let target_physical_height = (target_height * scale_factor).round() as u32;
+
+    if current_physical.height == target_physical_height {
+        return Ok(());
+    }
+
+    // When the window is hidden, snap immediately without animation
+    if !window.is_visible().unwrap_or(false) {
+        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+        let _ = window.set_size(target_logical);
+        return Ok(());
+    }
+
+    let generation = RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let window_clone = window.clone();
+    let start_h = current_physical.height as f64;
+    let end_h = target_physical_height as f64;
+
+    std::thread::spawn(move || {
+        const STEPS: usize = 9;
+        const STEP_DELAY_MS: u64 = 16;
+
+        for i in 1..=STEPS {
+            if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            let t = i as f64 / STEPS as f64;
+            // Cubic ease-out: 1.0 - (1.0 - t)^3
+            let factor = 1.0 - (1.0 - t).powi(3);
+            let current_physical_h = (start_h + (end_h - start_h) * factor).round() as u32;
+            let current_logical_h = current_physical_h as f64 / scale_factor;
+            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+
+            if i < STEPS {
+                std::thread::sleep(std::time::Duration::from_millis(STEP_DELAY_MS));
             }
         }
 
-        use tauri::window::{Color, Effect, EffectsBuilder};
-        let effects = EffectsBuilder::new()
-            .effect(Effect::Acrylic)
-            .color(Color(16, 16, 20, 65))
-            .build();
-        match window.set_effects(effects) {
-            Ok(()) => true,
-            Err(err) => {
-                eprintln!("Warning: failed to enable Windows Acrylic backdrop: {err}");
-                false
-            }
+        if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
+            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
         }
-    }
+    });
 
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, WebKitGTK and composite window managers (KWin, Mutter, Wayland compositors)
-        // render transparent webviews directly. Native glass/blur CSS is active.
-        let _ = window;
-        true
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-    {
-        let _ = window;
-        false
-    }
+    Ok(())
 }
 
 pub fn calculate_launcher_position(
@@ -322,13 +327,15 @@ fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
 }
 
 pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>) {
-    let Ok(window_size) = window.outer_size() else {
-        return;
-    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let full_window_size = PhysicalSize::new(
+        (LAUNCHER_WIDTH * scale_factor).round() as u32,
+        (LAUNCHER_HEIGHT_EXPANDED * scale_factor).round() as u32,
+    );
     if let Some(monitor) = resolve_target_monitor(window) {
         let work_area = monitor.work_area();
         let target_pos =
-            calculate_launcher_position(window_size, work_area.position, work_area.size);
+            calculate_launcher_position(full_window_size, work_area.position, work_area.size);
         let _ = window.set_position(target_pos);
     } else {
         let _ = window.center();
@@ -380,6 +387,8 @@ pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
     if let Some(state) = app.try_state::<LauncherState>() {
         state.reset_shown();
     }
+
+    let _ = set_launcher_height(app, false);
 
     if let Err(err) = window.emit(EVENT_LAUNCHER_HIDDEN, ()) {
         eprintln!("Warning: failed to emit launcher-hidden event: {err}");

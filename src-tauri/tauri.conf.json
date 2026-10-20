@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Lux",
-        "width": 680,
-        "height": 430,
+        "width": 760,
+        "height": 144,
         "visible": false,
         "decorations": false,
         "transparent": true,
