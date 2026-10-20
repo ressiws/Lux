@@ -20,6 +20,7 @@
     onLauncherShown,
     onOpenClipboard,
     onOpenLauncher,
+    onOpenSettings,
     openTarget,
     openTargetAsAdmin,
     reindex,
@@ -890,8 +891,11 @@
     let unlistenIndexing: (() => void) | undefined;
     let unlistenOpenLauncher: (() => void) | undefined;
     let unlistenOpenClipboard: (() => void) | undefined;
+    let unlistenOpenSettings: (() => void) | undefined;
 
     void onOpenLauncher(() => {
+      settingsOpen = false;
+      actionsOpen = false;
       void switchMode("launcher");
     }).then((unlisten) => {
       if (disposed) {
@@ -908,6 +912,19 @@
         unlisten();
       } else {
         unlistenOpenClipboard = unlisten;
+      }
+    });
+
+    void onOpenSettings(() => {
+      appMode = "launcher";
+      settingsOpen = true;
+      actionsOpen = false;
+      void syncWindowHeight(true);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenOpenSettings = unlisten;
       }
     });
 
@@ -982,6 +999,7 @@
       unlistenIndexing?.();
       unlistenOpenLauncher?.();
       unlistenOpenClipboard?.();
+      unlistenOpenSettings?.();
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("keydown", handleKeydown);
     };

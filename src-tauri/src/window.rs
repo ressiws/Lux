@@ -525,6 +525,37 @@ pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool)
 
 pub const EVENT_OPEN_LAUNCHER: &str = "lux://open-launcher";
 pub const EVENT_OPEN_CLIPBOARD: &str = "lux://open-clipboard";
+pub const EVENT_OPEN_SETTINGS: &str = "lux://open-settings";
+
+pub fn show_launcher_window_explicit<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.set_mode(WindowMode::Launcher);
+        state.record_shown();
+    }
+
+    let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+    show_launcher_window(app)?;
+    set_launcher_height(app, false)
+}
+
+pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.set_mode(WindowMode::Launcher);
+        state.record_shown();
+    }
+
+    let _ = window.emit(EVENT_OPEN_SETTINGS, ());
+    show_launcher_window(app)?;
+    set_launcher_height(app, true)
+}
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = app

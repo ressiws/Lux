@@ -7,15 +7,18 @@ use tauri::{
 use crate::{shortcuts, window, window::LauncherState};
 
 const MENU_ID_OPEN: &str = "open";
+const MENU_ID_SETTINGS: &str = "settings";
 const MENU_ID_QUIT: &str = "quit";
 
 pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let open_item = MenuItem::with_id(app, MENU_ID_OPEN, "Open Lux", true, None::<&str>)
+    let open_item = MenuItem::with_id(app, MENU_ID_OPEN, "Open Launcher", true, None::<&str>)
         .map_err(|err| format!("Failed to create tray Open item: {err}"))?;
+    let settings_item = MenuItem::with_id(app, MENU_ID_SETTINGS, "Open Settings", true, None::<&str>)
+        .map_err(|err| format!("Failed to create tray Settings item: {err}"))?;
     let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, "Quit Lux", true, None::<&str>)
         .map_err(|err| format!("Failed to create tray Quit item: {err}"))?;
 
-    let menu = Menu::with_items(app, &[&open_item, &quit_item])
+    let menu = Menu::with_items(app, &[&open_item, &settings_item, &quit_item])
         .map_err(|err| format!("Failed to create tray menu: {err}"))?;
 
     let mut builder = TrayIconBuilder::with_id("lux-tray")
@@ -24,8 +27,13 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
             MENU_ID_OPEN => {
-                if let Err(err) = window::show_launcher_window(app_handle) {
+                if let Err(err) = window::show_launcher_window_explicit(app_handle) {
                     eprintln!("Warning: failed to open launcher from tray menu: {err}");
+                }
+            }
+            MENU_ID_SETTINGS => {
+                if let Err(err) = window::show_settings_window(app_handle) {
+                    eprintln!("Warning: failed to open settings from tray menu: {err}");
                 }
             }
             MENU_ID_QUIT => {

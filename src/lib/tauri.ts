@@ -115,6 +115,12 @@ export async function onOpenClipboard(handler: () => void): Promise<UnlistenFn> 
   });
 }
 
+export async function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("lux://open-settings", () => {
+    handler();
+  });
+}
+
 export async function getShortcutsStatus(): Promise<import("./types").ShortcutConfigStatus> {
   return invoke<import("./types").ShortcutConfigStatus>("get_shortcuts_status");
 }
