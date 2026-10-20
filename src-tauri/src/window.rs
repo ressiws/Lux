@@ -236,6 +236,12 @@ mod win32_backdrop {
         }
     }
 
+    #[repr(C)]
+    pub struct POINT {
+        pub x: i32,
+        pub y: i32,
+    }
+
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
@@ -251,6 +257,18 @@ mod win32_backdrop {
             cy: i32,
             flags: u32,
         ) -> i32;
+        fn GetCursorPos(lp_point: *mut POINT) -> i32;
+    }
+
+    pub fn get_global_cursor_pos() -> Option<(i32, i32)> {
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetCursorPos(&mut pt) != 0 {
+                Some((pt.x, pt.y))
+            } else {
+                None
+            }
+        }
     }
 
     const GWL_STYLE: i32 = -16;
@@ -338,17 +356,30 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
     }
 
     let width_physical = (LAUNCHER_WIDTH * scale_factor).round() as u32;
-    let work_area = resolve_target_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
+    let work_area = resolve_resize_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
 
     // When the window is hidden, snap immediately without animation
     if !window.is_visible().unwrap_or(false) {
-        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
-        let _ = window.set_size(target_logical);
         if let Some((work_pos, work_size)) = work_area {
             let target_physical_size = PhysicalSize::new(width_physical, target_physical_height);
             let target_pos = calculate_launcher_position(target_physical_size, work_pos, work_size);
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = window.hwnd() {
+                win32_backdrop::set_window_rect(
+                    hwnd.0,
+                    target_pos.x,
+                    target_pos.y,
+                    width_physical as i32,
+                    target_physical_height as i32,
+                );
+                return Ok(());
+            }
+            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let _ = window.set_size(target_logical);
             let _ = window.set_position(target_pos);
         } else {
+            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let _ = window.set_size(target_logical);
             let _ = window.center();
         }
         return Ok(());
@@ -416,8 +447,11 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                         target_physical_height as i32,
                     );
                 }
-                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
-                let _ = window_clone.set_position(end_pos);
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                    let _ = window_clone.set_position(end_pos);
+                }
             } else {
                 let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
                 let _ = window_clone.center();
@@ -452,6 +486,13 @@ pub fn calculate_launcher_position(
 }
 
 fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    #[cfg(target_os = "windows")]
+    if let Some((x, y)) = win32_backdrop::get_global_cursor_pos()
+        && let Ok(Some(monitor)) = window.monitor_from_point(x as f64, y as f64)
+    {
+        return Some(monitor);
+    }
+    #[cfg(not(target_os = "windows"))]
     if let Ok(cursor) = window.cursor_position()
         && let Ok(Some(monitor)) = window.monitor_from_point(cursor.x, cursor.y)
     {
@@ -461,6 +502,13 @@ fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
         return Some(monitor);
     }
     window.primary_monitor().ok().flatten()
+}
+
+fn resolve_resize_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        return Some(monitor);
+    }
+    resolve_target_monitor(window)
 }
 
 pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
@@ -473,8 +521,23 @@ pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_
         let work_area = monitor.work_area();
         let target_pos =
             calculate_launcher_position(window_physical_size, work_area.position, work_area.size);
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = window.hwnd() {
+            win32_backdrop::set_window_rect(
+                hwnd.0,
+                target_pos.x,
+                target_pos.y,
+                window_physical_size.width as i32,
+                window_physical_size.height as i32,
+            );
+            return;
+        }
+        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+        let _ = window.set_size(target_logical);
         let _ = window.set_position(target_pos);
     } else {
+        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+        let _ = window.set_size(target_logical);
         let _ = window.center();
     }
 }
@@ -497,8 +560,6 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         WindowMode::Clipboard => CLIPBOARD_HEIGHT,
         WindowMode::Launcher => LAUNCHER_HEIGHT_IDLE,
     };
-    let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
-    let _ = window.set_size(target_logical);
 
     position_on_active_monitor(&window, target_height);
 
@@ -605,8 +666,7 @@ pub fn show_launcher_window_explicit<R: Runtime>(app: &AppHandle<R>) -> Result<(
     }
 
     let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
-    show_launcher_window(app)?;
-    set_launcher_height(app, false)
+    show_launcher_window(app)
 }
 
 pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -619,9 +679,46 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         state.record_shown();
     }
 
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+
     let _ = window.emit(EVENT_OPEN_SETTINGS, ());
-    show_launcher_window(app)?;
-    set_launcher_height(app, true)
+
+    if is_visible && !is_minimized {
+        set_launcher_height(app, true)
+    } else {
+        position_on_active_monitor(&window, LAUNCHER_HEIGHT_EXPANDED);
+
+        if window.is_minimized().unwrap_or(false)
+            && let Err(err) = window.unminimize()
+        {
+            eprintln!("Warning: failed to unminimize launcher window: {err}");
+        }
+
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = window.hwnd() {
+            win32_backdrop::configure_window_frame(hwnd.0);
+        }
+
+        window
+            .show()
+            .map_err(|err| format!("Failed to show launcher window: {err}"))?;
+
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = window.hwnd() {
+            win32_backdrop::activate_foreground(hwnd.0);
+        }
+
+        if let Err(err) = window.set_focus() {
+            eprintln!("Warning: failed to focus launcher window: {err}");
+        }
+
+        if let Err(err) = window.emit(EVENT_LAUNCHER_SHOWN, ()) {
+            eprintln!("Warning: failed to emit launcher-shown event: {err}");
+        }
+
+        Ok(())
+    }
 }
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -734,6 +831,25 @@ mod tests {
         assert_eq!(compact_center_y, expected_screen_center_y);
         assert_eq!(expanded_center_y, expected_screen_center_y);
         assert_eq!(compact_center_y, expanded_center_y);
+    }
+
+    #[test]
+    fn dynamic_height_resizing_keeps_center_anchored_without_drift() {
+        let work_pos = PhysicalPosition::new(0, 40);
+        let work_size = PhysicalSize::new(2560, 1400);
+        let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
+
+        // Sequence of height transitions: compact idle (144), settings / search (500), clipboard (560), back to idle
+        let heights = [144, 250, 380, 500, 560, 300, 144];
+        for h in heights {
+            let size = PhysicalSize::new(760, h);
+            let pos = calculate_launcher_position(size, work_pos, work_size);
+            let center_y = pos.y + (h as i32 / 2);
+            assert_eq!(
+                center_y, screen_center_y,
+                "Height {h} drifted from screen center {screen_center_y}"
+            );
+        }
     }
 
     #[test]
