@@ -72,3 +72,59 @@ export async function onLauncherHidden(
     handler();
   });
 }
+
+export async function setWindowHeight(height: number): Promise<void> {
+  return invoke<void>("set_window_height", { height });
+}
+
+export async function getClipboardHistory(): Promise<import("./types").ClipboardEntry[]> {
+  return invoke<import("./types").ClipboardEntry[]>("get_clipboard_history");
+}
+
+export async function copyClipboardEntry(id: string): Promise<void> {
+  return invoke<void>("copy_clipboard_entry", { id });
+}
+
+export async function deleteClipboardEntry(id: string): Promise<void> {
+  return invoke<void>("delete_clipboard_entry", { id });
+}
+
+export async function clearClipboardHistory(): Promise<void> {
+  return invoke<void>("clear_clipboard_history");
+}
+
+export async function togglePinClipboardEntry(id: string): Promise<boolean> {
+  return invoke<boolean>("toggle_pin_clipboard_entry", { id });
+}
+
+export async function onClipboardUpdated(handler: () => void): Promise<UnlistenFn> {
+  return listen("lux://clipboard-updated", () => {
+    handler();
+  });
+}
+
+export async function onOpenLauncher(handler: () => void): Promise<UnlistenFn> {
+  return listen("lux://open-launcher", () => {
+    handler();
+  });
+}
+
+export async function onOpenClipboard(handler: () => void): Promise<UnlistenFn> {
+  return listen("lux://open-clipboard", () => {
+    handler();
+  });
+}
+
+export async function getShortcutsStatus(): Promise<import("./types").ShortcutConfigStatus> {
+  return invoke<import("./types").ShortcutConfigStatus>("get_shortcuts_status");
+}
+
+export async function updateShortcuts(
+  launcher: string,
+  clipboard: string,
+): Promise<import("./types").ShortcutConfigStatus> {
+  return invoke<import("./types").ShortcutConfigStatus>("update_shortcuts", {
+    launcher,
+    clipboard,
+  });
+}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import ClipboardView from "$lib/ClipboardView.svelte";
   import {
     CATEGORY_ICONS,
     buildSections,
@@ -7,18 +8,25 @@
     splitHighlight,
   } from "$lib/mock-data";
   import {
+    clearClipboardHistory,
+    getClipboardHistory,
     getIndexStats,
     getLauncherStatus,
+    getShortcutsStatus,
     hideLauncher,
     onIndexingStatus,
     onLauncherHidden,
     onLauncherShown,
+    onOpenClipboard,
+    onOpenLauncher,
     openTarget,
     openTargetAsAdmin,
     reindex,
     revealItemInFolder,
     searchLauncher,
     setLauncherHeight,
+    setWindowHeight,
+    updateShortcuts,
   } from "$lib/tauri";
   import type {
     IndexStats,
@@ -26,9 +34,15 @@
     ItemAction,
     LauncherItem,
     SearchResponse,
+    ShortcutConfigStatus,
   } from "$lib/types";
 
-  type SettingsCategory = "general" | "appearance" | "search" | "features";
+  type SettingsCategory =
+    | "general"
+    | "appearance"
+    | "search"
+    | "features"
+    | "shortcuts";
   let activeCategory = $state<SettingsCategory>("general");
 
   interface SettingsState {
@@ -56,6 +70,13 @@
     totalFiles: 0,
     isIndexed: false,
   });
+  let appMode = $state<"launcher" | "clipboard">("launcher");
+  let launcherShortcutInput = $state("Alt+Space");
+  let clipboardShortcutInput = $state("Alt+Shift+V");
+  let shortcutsStatus = $state<ShortcutConfigStatus | null>(null);
+  let shortcutMessage = $state("");
+  let shortcutIsError = $state(false);
+  let clipboardCount = $state(0);
 
   let settings = $state<SettingsState>({
     theme: "system",
@@ -115,7 +136,76 @@
     }
   }
 
+  async function switchMode(mode: "launcher" | "clipboard"): Promise<void> {
+    appMode = mode;
+    if (mode === "clipboard") {
+      settingsOpen = false;
+      actionsOpen = false;
+      try {
+        await setWindowHeight(560);
+      } catch {
+        // Ignore outside Tauri
+      }
+    } else {
+      await syncWindowHeight(shouldExpand);
+      focusSearchInput();
+    }
+  }
+
+  async function loadShortcutsStatus(): Promise<void> {
+    try {
+      const status = await getShortcutsStatus();
+      shortcutsStatus = status;
+      launcherShortcutInput = status.launcher.shortcut;
+      clipboardShortcutInput = status.clipboard.shortcut;
+    } catch {
+      // Ignore outside Tauri
+    }
+    try {
+      const history = await getClipboardHistory();
+      clipboardCount = history.length;
+    } catch {
+      // Ignore outside Tauri
+    }
+  }
+
+  async function applyShortcuts(): Promise<void> {
+    shortcutMessage = "";
+    shortcutIsError = false;
+    try {
+      const updated = await updateShortcuts(
+        launcherShortcutInput.trim(),
+        clipboardShortcutInput.trim(),
+      );
+      shortcutsStatus = updated;
+      if (!updated.launcher.registered && updated.launcher.error) {
+        shortcutIsError = true;
+        shortcutMessage = `Launcher shortcut: ${updated.launcher.error}`;
+      } else if (!updated.clipboard.registered && updated.clipboard.error) {
+        shortcutIsError = true;
+        shortcutMessage = `Clipboard shortcut: ${updated.clipboard.error}`;
+      } else {
+        shortcutIsError = false;
+        shortcutMessage = "Shortcuts updated and registered successfully.";
+      }
+    } catch (err) {
+      shortcutIsError = true;
+      shortcutMessage = String(err);
+    }
+  }
+
+  async function handleClearClipboardFromSettings(): Promise<void> {
+    try {
+      await clearClipboardHistory();
+      clipboardCount = 0;
+      say("Clipboard history cleared");
+    } catch (err) {
+      say(`Failed to clear: ${err}`);
+    }
+  }
+
   $effect(() => {
+    if (appMode !== "launcher") return;
     const expand = shouldExpand;
     if (!expand && windowExpanded) {
       isCollapsing = true;
@@ -313,7 +403,11 @@
       await copyAndAnnounce(item.calc.raw, item.calc.raw);
       return;
     }
-    if (item.category === "clip" || item.category === "snip") {
+    if (item.category === "clip" || item.name.toLowerCase().includes("clipboard")) {
+      void switchMode("clipboard");
+      return;
+    }
+    if (item.category === "snip") {
       say("Pasted");
       return;
     }
@@ -786,10 +880,34 @@
       })
       .catch(() => {});
 
+    void loadShortcutsStatus();
+
     let disposed = false;
     let unlistenShown: (() => void) | undefined;
     let unlistenHidden: (() => void) | undefined;
     let unlistenIndexing: (() => void) | undefined;
+    let unlistenOpenLauncher: (() => void) | undefined;
+    let unlistenOpenClipboard: (() => void) | undefined;
+
+    void onOpenLauncher(() => {
+      void switchMode("launcher");
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenOpenLauncher = unlisten;
+      }
+    });
+
+    void onOpenClipboard(() => {
+      void switchMode("clipboard");
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenOpenClipboard = unlisten;
+      }
+    });
 
     void getLauncherStatus()
       .then((status) => {
@@ -821,7 +939,9 @@
     });
 
     void onLauncherShown(() => {
-      resetLauncherState(true);
+      if (appMode === "launcher") {
+        resetLauncherState(true);
+      }
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -832,6 +952,7 @@
 
     void onLauncherHidden(() => {
       resetLauncherState(false);
+      appMode = "launcher";
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -841,7 +962,9 @@
     });
 
     const handleWindowFocus = (): void => {
-      focusSearchInput();
+      if (appMode === "launcher") {
+        focusSearchInput();
+      }
     };
 
     window.addEventListener("focus", handleWindowFocus);
@@ -855,12 +978,15 @@
       unlistenShown?.();
       unlistenHidden?.();
       unlistenIndexing?.();
+      unlistenOpenLauncher?.();
+      unlistenOpenClipboard?.();
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("keydown", handleKeydown);
     };
   });
 </script>
 
+{#if appMode === "launcher"}
 <div
   class="win"
   id="win"
@@ -1314,6 +1440,19 @@
     {/if}
   </div>
 </div>
+{:else}
+<div
+  class="win clipboard-win"
+  id="win"
+  role="dialog"
+  aria-label="Lux Clipboard History"
+>
+  <ClipboardView
+    onClose={dismissLauncher}
+    onSwitchToLauncher={() => void switchMode("launcher")}
+  />
+</div>
+{/if}
 
 {#if settingsOpen}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1392,6 +1531,16 @@
       onclick={() => (activeCategory = "features")}
     >
       Features
+    </button>
+    <button
+      type="button"
+      role="tab"
+      class:active={activeCategory === "shortcuts"}
+      aria-selected={activeCategory === "shortcuts"}
+      onmousedown={preventFocusLossOnMouseDown}
+      onclick={() => (activeCategory = "shortcuts")}
+    >
+      Shortcuts
     </button>
   </div>
 
@@ -1557,6 +1706,79 @@
           onmousedown={preventFocusLossOnMouseDown}
           onclick={() => setSetting("progressBar", !settings.progressBar)}
         ></button>
+      </div>
+    {:else if activeCategory === "shortcuts"}
+      <div class="srow">
+        <div>
+          <b>Launcher Shortcut</b>
+          <small>Global hotkey to show or hide the command launcher</small>
+        </div>
+        <input
+          class="shortcut-input"
+          bind:value={launcherShortcutInput}
+          onblur={applyShortcuts}
+          onkeydown={(e) => {
+            if (e.key === "Enter") applyShortcuts();
+          }}
+          placeholder="e.g. Alt+Space"
+        />
+      </div>
+      <div class="srow">
+        <div>
+          <b>Clipboard History Shortcut</b>
+          <small>Global hotkey to open clipboard history directly</small>
+        </div>
+        <input
+          class="shortcut-input"
+          bind:value={clipboardShortcutInput}
+          onblur={applyShortcuts}
+          onkeydown={(e) => {
+            if (e.key === "Enter") applyShortcuts();
+          }}
+          placeholder="e.g. Alt+Shift+V"
+        />
+      </div>
+
+      {#if (launcherShortcutInput.toLowerCase().includes("win") && launcherShortcutInput.toLowerCase().includes("v")) || (clipboardShortcutInput.toLowerCase().includes("win") && clipboardShortcutInput.toLowerCase().includes("v"))}
+        <div class="shortcut-win-v-notice">
+          ⚠️ <strong>Win + V</strong> is reserved exclusively by Windows for its native clipboard manager and cannot be registered safely by third-party desktop applications. Use <strong>Alt + Shift + V</strong> or another modifier combination.
+        </div>
+      {/if}
+
+      {#if shortcutMessage}
+        <div class="shortcut-status-banner" class:error={shortcutIsError}>
+          {shortcutMessage}
+        </div>
+      {/if}
+
+      <div class="srow">
+        <div>
+          <b>Apply Changes</b>
+          <small>Re-register global shortcuts at runtime</small>
+        </div>
+        <button
+          class="btn-sub"
+          type="button"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={applyShortcuts}
+        >
+          Save Shortcuts
+        </button>
+      </div>
+
+      <div class="srow" style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px;">
+        <div>
+          <b>Clipboard History Storage</b>
+          <small>{clipboardCount} {clipboardCount === 1 ? "entry" : "entries"} stored locally</small>
+        </div>
+        <button
+          class="btn-sub danger"
+          type="button"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={handleClearClipboardFromSettings}
+        >
+          Clear History
+        </button>
       </div>
     {/if}
   </div>
@@ -2493,5 +2715,56 @@
   .sw[aria-checked="true"]::after {
     left: 16px;
     background: var(--bg);
+  }
+
+  .clipboard-win {
+    height: 560px;
+    max-height: 560px;
+  }
+
+  .shortcut-input {
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    color: var(--fg);
+    font: 500 12px Inter, sans-serif;
+    text-align: right;
+    width: 140px;
+    outline: none;
+  }
+
+  .shortcut-input:focus {
+    border-color: var(--mut);
+  }
+
+  .shortcut-win-v-notice {
+    background: rgba(229, 72, 77, 0.1);
+    color: var(--acc);
+    border: 1px solid rgba(229, 72, 77, 0.25);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    margin: 6px 0;
+  }
+
+  .shortcut-status-banner {
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    background: var(--chip);
+    color: var(--fg);
+    margin: 6px 0;
+  }
+
+  .shortcut-status-banner.error {
+    background: rgba(229, 72, 77, 0.1);
+    color: var(--acc);
+    border: 1px solid rgba(229, 72, 77, 0.25);
+  }
+
+  .btn-sub.danger {
+    color: var(--acc);
   }
 </style>

@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod search;
 pub mod shortcuts;
 pub mod tray;
@@ -5,6 +6,12 @@ pub mod window;
 
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 use window::{LauncherState, LauncherStatus};
+
+use clipboard::{
+    clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
+    toggle_pin_clipboard_entry,
+};
+use shortcuts::{get_shortcuts_status, update_shortcuts};
 
 #[tauri::command]
 fn hide_launcher(app: AppHandle) -> Result<(), String> {
@@ -77,6 +84,11 @@ fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
     }
 }
 
+#[tauri::command]
+fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
+    window::set_window_target_height(&app, height)
+}
+
 fn should_show_on_startup() -> bool {
     if std::env::args().any(|arg| arg == "--show") {
         return true;
@@ -100,9 +112,17 @@ pub fn run() {
             open_target_as_admin,
             reveal_item_in_folder,
             set_launcher_height,
+            set_window_height,
             set_native_glass,
             reindex,
-            get_index_stats
+            get_index_stats,
+            update_shortcuts,
+            get_shortcuts_status,
+            get_clipboard_history,
+            copy_clipboard_entry,
+            delete_clipboard_entry,
+            clear_clipboard_history,
+            toggle_pin_clipboard_entry
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -114,8 +134,12 @@ pub fn run() {
                 .unwrap_or(false);
 
             let configured_shortcut = shortcuts::resolve_configured_shortcut();
-            let shortcut_status =
-                shortcuts::register_launcher_shortcut(handle, &configured_shortcut);
+            let configured_clipboard_shortcut = shortcuts::resolve_configured_clipboard_shortcut();
+            let shortcut_config = shortcuts::register_all_shortcuts(
+                handle,
+                &configured_shortcut,
+                &configured_clipboard_shortcut,
+            );
 
             let tray_ok = match tray::setup_tray(handle) {
                 Ok(()) => true,
@@ -126,15 +150,25 @@ pub fn run() {
             };
 
             app.manage(LauncherState::new(
-                shortcut_status.clone(),
+                shortcut_config.launcher.clone(),
                 native_glass_supported,
             ));
+
+            app.manage(shortcuts::ShortcutsState::new(
+                shortcut_config.launcher.clone(),
+                shortcut_config.clipboard.clone(),
+            ));
+
+            let clipboard_state = clipboard::ClipboardState::new(clipboard::DEFAULT_MAX_CLIPBOARD_ENTRIES);
+            let clipboard_history_arc = clipboard_state.history.clone();
+            app.manage(clipboard_state);
+            clipboard::start_clipboard_monitor(handle.clone(), clipboard_history_arc);
 
             let search_state = search::SearchState::new();
             app.manage(search_state);
             search::start_background_indexing(handle.clone());
 
-            if (should_show_on_startup() || (!shortcut_status.registered && !tray_ok))
+            if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
                 && let Err(err) = window::show_launcher_window(handle)
             {
                 eprintln!("Warning: failed to show launcher window on startup: {err}");
@@ -177,20 +211,9 @@ pub fn run() {
         }
     };
 
-    app.run(|app_handle, event| match event {
-        RunEvent::ExitRequested { api, code, .. } => {
-            let is_quitting = app_handle
-                .try_state::<LauncherState>()
-                .map(|s| s.is_quitting())
-                .unwrap_or(false);
-
-            if code.is_none() && !is_quitting {
-                api.prevent_exit();
-            }
-        }
-        RunEvent::Exit => {
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
             shortcuts::unregister_all_shortcuts(app_handle);
         }
-        _ => {}
     });
 }
