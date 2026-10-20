@@ -1808,41 +1808,41 @@
 
   @media (prefers-color-scheme: dark) {
     :global(:root:not([data-theme="light"])) {
-      --bg: rgba(24, 24, 28, 0.92);
-      --bgt: rgba(24, 24, 28, 0.92);
-      --fg: #ededef;
-      --mut: #9b9ba1;
-      --dim: #6b6b72;
-      --line: rgba(255, 255, 255, 0.08);
+      --bg: rgba(10, 10, 12, 0.94);
+      --bgt: rgba(10, 10, 12, 0.94);
+      --fg: #f4f4f5;
+      --mut: #a1a1aa;
+      --dim: #71717a;
+      --line: rgba(255, 255, 255, 0.07);
       --sel: rgba(255, 255, 255, 0.08);
-      --chip: rgba(255, 255, 255, 0.08);
-      --kbd: rgba(255, 255, 255, 0.1);
+      --chip: rgba(255, 255, 255, 0.07);
+      --kbd: rgba(255, 255, 255, 0.09);
       --shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.1), 0 24px 60px -12px rgba(0, 0, 0, 0.7);
-      --wall: linear-gradient(135deg, #1c2430, #2a3140 50%, #3b3550);
-      --glass: rgba(24, 24, 28, 0.92);
-      --gfb: rgba(24, 24, 28, 0.92);
-      --hi: rgba(255, 255, 255, 0.09);
+        0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 60px -12px rgba(0, 0, 0, 0.8);
+      --wall: linear-gradient(135deg, #0a0a0c, #141418 50%, #1e1e24);
+      --glass: rgba(14, 14, 18, 0.9);
+      --gfb: rgba(10, 10, 12, 0.96);
+      --hi: rgba(255, 255, 255, 0.07);
       color-scheme: dark;
     }
   }
 
   :global(:root[data-theme="dark"]) {
-    --bg: rgba(24, 24, 28, 0.92);
-    --bgt: rgba(24, 24, 28, 0.92);
-    --fg: #ededef;
-    --mut: #9b9ba1;
-    --dim: #6b6b72;
-    --line: rgba(255, 255, 255, 0.08);
+    --bg: rgba(10, 10, 12, 0.94);
+    --bgt: rgba(10, 10, 12, 0.94);
+    --fg: #f4f4f5;
+    --mut: #a1a1aa;
+    --dim: #71717a;
+    --line: rgba(255, 255, 255, 0.07);
     --sel: rgba(255, 255, 255, 0.08);
-    --chip: rgba(255, 255, 255, 0.08);
-    --kbd: rgba(255, 255, 255, 0.1);
+    --chip: rgba(255, 255, 255, 0.07);
+    --kbd: rgba(255, 255, 255, 0.09);
     --shadow:
-      0 0 0 1px rgba(255, 255, 255, 0.1), 0 24px 60px -12px rgba(0, 0, 0, 0.7);
-    --wall: linear-gradient(135deg, #1c2430, #2a3140 50%, #3b3550);
-    --glass: rgba(24, 24, 28, 0.92);
-    --gfb: rgba(24, 24, 28, 0.92);
-    --hi: rgba(255, 255, 255, 0.09);
+      0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 60px -12px rgba(0, 0, 0, 0.8);
+    --wall: linear-gradient(135deg, #0a0a0c, #141418 50%, #1e1e24);
+    --glass: rgba(14, 14, 18, 0.9);
+    --gfb: rgba(10, 10, 12, 0.96);
+    --hi: rgba(255, 255, 255, 0.07);
     color-scheme: dark;
   }
 
@@ -1894,6 +1894,8 @@
     height: 100vh;
     box-sizing: border-box;
     background: var(--bg);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
     border-radius: 14px;
     box-shadow: var(--shadow), inset 0 1px 0 var(--hi);
     overflow: hidden;
@@ -2539,8 +2541,10 @@
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: thin;
-    background: var(--bg);
-    box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--line);
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    backdrop-filter: blur(24px) saturate(1.4);
+    box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
     border-radius: 12px;
     z-index: 10;
   }
