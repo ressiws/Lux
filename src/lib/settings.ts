@@ -11,6 +11,8 @@ export interface SettingsState {
   caret: boolean;
   fileSearch: boolean;
   clipboardHistory: boolean;
+  flowPrefixCompatibility: boolean;
+  flowPrefixes: string[];
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -22,6 +24,8 @@ export const DEFAULT_SETTINGS: SettingsState = {
   caret: true,
   fileSearch: true,
   clipboardHistory: true,
+  flowPrefixCompatibility: true,
+  flowPrefixes: ["et"],
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";

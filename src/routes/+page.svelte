@@ -36,6 +36,7 @@
     type SettingsState,
   } from "$lib/settings";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { resolvePrefix } from "$lib/prefix";
   import type {
     FeaturesConfig,
     IndexStats,
@@ -83,9 +84,17 @@
   let isSearching = $state(false);
   let searchBarVisible = $state(false);
 
-  const isIdle = $derived(query.trim().length === 0);
+  const prefixResolution = $derived(
+    resolvePrefix(
+      query,
+      settings.flowPrefixCompatibility,
+      settings.flowPrefixes,
+    ),
+  );
+  const effectiveQuery = $derived(prefixResolution.effectiveQuery);
+  const isIdle = $derived(effectiveQuery.trim().length === 0);
   const sections = $derived(
-    buildSections(query, searchResponse, {
+    buildSections(effectiveQuery, searchResponse, {
       enableFileSearch: settings.fileSearch,
     }),
   );
@@ -103,7 +112,7 @@
     ),
   );
   const showEmptyState = $derived(
-    query.trim().length > 0 && hasOnlyFallbackSections(sections),
+    effectiveQuery.trim().length > 0 && hasOnlyFallbackSections(sections),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
 
@@ -208,7 +217,12 @@
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
-    void performSearch(val);
+    const resolved = resolvePrefix(
+      val,
+      settings.flowPrefixCompatibility,
+      settings.flowPrefixes,
+    ).effectiveQuery;
+    void performSearch(resolved);
     focusSearchInput();
   }
 
@@ -444,7 +458,7 @@
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
 
-    const q = query;
+    const q = effectiveQuery;
     if (q.trim().length === 0) {
       isSearching = false;
       searchBarVisible = false;
@@ -949,6 +963,14 @@
       <circle cx="9" cy="9" r="5.5" />
       <path d="m13.2 13.2 3.3 3.3" />
     </svg>
+    {#if prefixResolution.hasPrefix && prefixResolution.prefix}
+      <span
+        class="prefix-pill"
+        title="Prefix '{prefixResolution.prefix}' ignored for Flow Launcher compatibility"
+      >
+        {prefixResolution.prefix}
+      </span>
+    {/if}
     <input
       id="q"
       bind:this={searchInput}
@@ -1036,7 +1058,7 @@
             <circle cx="11" cy="11" r="6.5" />
             <path d="m16 16 4 4M9 11h4" />
           </svg>
-          <div class="t">No results for “{query.trim()}”</div>
+          <div class="t">No results for “{effectiveQuery.trim()}”</div>
           <p>Check the spelling, or try one of these.</p>
         </div>
       {/if}
@@ -1610,6 +1632,21 @@
 
   #q::placeholder {
     color: var(--dim);
+  }
+
+  .prefix-pill {
+    flex: none;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--chip);
+    color: var(--mut);
+    border: 1px solid var(--line);
+    user-select: none;
+    line-height: 1.4;
   }
 
   .spin {

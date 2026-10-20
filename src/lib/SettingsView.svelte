@@ -40,6 +40,23 @@
   let shortcutMessage = $state("");
   let shortcutIsError = $state(false);
   let clipboardCount = $state(0);
+  let newPrefixInput = $state("");
+
+  function addPrefix(): void {
+    const trimmed = newPrefixInput.trim().toLowerCase();
+    if (!trimmed) return;
+    if (!settings.flowPrefixes.includes(trimmed)) {
+      setSetting("flowPrefixes", [...settings.flowPrefixes, trimmed]);
+    }
+    newPrefixInput = "";
+  }
+
+  function removePrefix(prefixToRemove: string): void {
+    setSetting(
+      "flowPrefixes",
+      settings.flowPrefixes.filter((p) => p !== prefixToRemove),
+    );
+  }
 
   async function loadFeatures(): Promise<void> {
     try {
@@ -408,6 +425,68 @@
           onclick={() => setSetting("fileSearch", !settings.fileSearch)}
         ></button>
       </div>
+
+      <div class="srow">
+        <div>
+          <b>Flow Launcher Prefix Compatibility</b>
+          <small>Ignore leading prefix tokens like "et" when searching</small>
+        </div>
+        <button
+          class="sw"
+          type="button"
+          role="switch"
+          aria-checked={settings.flowPrefixCompatibility}
+          aria-label="Flow Launcher prefix compatibility"
+          onclick={() =>
+            setSetting(
+              "flowPrefixCompatibility",
+              !settings.flowPrefixCompatibility,
+            )}
+        ></button>
+      </div>
+
+      {#if settings.flowPrefixCompatibility}
+        <div class="prefix-container">
+          <div class="prefix-list">
+            {#each settings.flowPrefixes as prefix}
+              <span class="prefix-tag">
+                <span>{prefix}</span>
+                <button
+                  type="button"
+                  class="prefix-remove-btn"
+                  title="Remove prefix"
+                  aria-label="Remove prefix {prefix}"
+                  onclick={() => removePrefix(prefix)}
+                >
+                  &times;
+                </button>
+              </span>
+            {/each}
+          </div>
+          <div class="prefix-add-row">
+            <input
+              type="text"
+              class="prefix-input"
+              placeholder="Add prefix (e.g. et)"
+              bind:value={newPrefixInput}
+              onkeydown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addPrefix();
+                }
+              }}
+            />
+            <button
+              type="button"
+              class="btn-sub"
+              disabled={!newPrefixInput.trim()}
+              onclick={addPrefix}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      {/if}
     {:else if activeCategory === "features"}
       <div class="srow">
         <div>
@@ -845,5 +924,72 @@
     padding: 2px 6px;
     border-radius: 4px;
     box-shadow: inset 0 -1px 0 var(--line);
+  }
+
+  .prefix-container {
+    padding: 8px 4px 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .prefix-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .prefix-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--fg);
+    font-family: monospace;
+  }
+
+  .prefix-remove-btn {
+    background: none;
+    border: none;
+    color: var(--mut);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s ease;
+  }
+
+  .prefix-remove-btn:hover {
+    color: #e5484d;
+  }
+
+  .prefix-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .prefix-input {
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 160px;
+  }
+
+  .prefix-input:focus {
+    border-color: var(--acc, #e5484d);
   }
 </style>
