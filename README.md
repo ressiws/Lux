@@ -1,5 +1,3 @@
-# Lux
-
 <p align="center">
   <img src="docs/images/banner.svg" alt="Lux banner" width="100%">
 </p>
