@@ -95,3 +95,33 @@ export interface IndexStats {
   readonly isIndexed: boolean;
 }
 
+export type ClipboardKind = "text" | "link" | "image" | "file" | "color";
+
+export interface ClipboardEntry {
+  readonly id: string;
+  readonly kind: ClipboardKind;
+  readonly name: string;
+  readonly preview: string | null;
+  readonly sourceApp: string | null;
+  readonly createdAt: number;
+  readonly isPinned: boolean;
+  readonly charCount: number | null;
+  readonly wordCount: number | null;
+  readonly linkUrl: string | null;
+  readonly linkTitle: string | null;
+  readonly linkDesc: string | null;
+  readonly filePath: string | null;
+  readonly fileSize: string | null;
+  readonly fileType: string | null;
+  readonly imageDims: string | null;
+  readonly imageSize: string | null;
+  readonly colorHex: string | null;
+  readonly colorRgb: string | null;
+  readonly colorHsl: string | null;
+}
+
+export interface ShortcutConfigStatus {
+  readonly launcher: ShortcutStatus;
+  readonly clipboard: ShortcutStatus;
+}
+

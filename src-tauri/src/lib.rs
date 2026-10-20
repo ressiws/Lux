@@ -84,6 +84,11 @@ fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
     }
 }
 
+#[tauri::command]
+fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
+    window::set_window_target_height(&app, height)
+}
+
 fn should_show_on_startup() -> bool {
     if std::env::args().any(|arg| arg == "--show") {
         return true;
@@ -107,6 +112,7 @@ pub fn run() {
             open_target_as_admin,
             reveal_item_in_folder,
             set_launcher_height,
+            set_window_height,
             set_native_glass,
             reindex,
             get_index_stats,

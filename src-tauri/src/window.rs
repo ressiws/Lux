@@ -238,19 +238,14 @@ pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Resul
 pub const LAUNCHER_WIDTH: f64 = 760.0;
 pub const LAUNCHER_HEIGHT_IDLE: f64 = 144.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
+pub const CLIPBOARD_HEIGHT: f64 = 560.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Result<(), String> {
+pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f64) -> Result<(), String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main window not found".to_string())?;
-
-    let target_height = if expanded {
-        LAUNCHER_HEIGHT_EXPANDED
-    } else {
-        LAUNCHER_HEIGHT_IDLE
-    };
 
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let current_physical = window.outer_size().map_err(|e| e.to_string())?;
@@ -298,6 +293,15 @@ pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Re
     });
 
     Ok(())
+}
+
+pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Result<(), String> {
+    let target_height = if expanded {
+        LAUNCHER_HEIGHT_EXPANDED
+    } else {
+        LAUNCHER_HEIGHT_IDLE
+    };
+    set_window_target_height(app, target_height)
 }
 
 pub fn calculate_launcher_position(
