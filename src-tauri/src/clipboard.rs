@@ -20,20 +20,29 @@ pub enum ClipboardKind {
     File,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntry {
     pub id: String,
     pub kind: ClipboardKind,
-    pub content: String,
-    pub preview: String,
-    pub details: Option<String>,
-    pub image_data: Option<String>,
-    pub image_dimensions: Option<String>,
+    pub name: String,
+    pub preview: Option<String>,
+    pub source_app: Option<String>,
+    pub created_at: i64,
+    pub is_pinned: bool,
+    pub char_count: Option<usize>,
+    pub word_count: Option<usize>,
+    pub link_url: Option<String>,
+    pub link_title: Option<String>,
+    pub link_desc: Option<String>,
+    pub file_path: Option<String>,
     pub file_size: Option<String>,
-    pub copied_at_ms: i64,
-    pub app_source: Option<String>,
-    pub pinned: bool,
+    pub file_type: Option<String>,
+    pub image_dims: Option<String>,
+    pub image_size: Option<String>,
+    pub color_hex: Option<String>,
+    pub color_rgb: Option<String>,
+    pub color_hsl: Option<String>,
 }
 
 fn current_timestamp_ms() -> i64 {
@@ -76,9 +85,19 @@ pub fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+        let kb = bytes as f64 / 1024.0;
+        if (kb - kb.round()).abs() < 0.05 {
+            format!("{} KB", kb.round() as usize)
+        } else {
+            format!("{kb:.1} KB")
+        }
     } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        let mb = bytes as f64 / (1024.0 * 1024.0);
+        if (mb - mb.round()).abs() < 0.05 {
+            format!("{} MB", mb.round() as usize)
+        } else {
+            format!("{mb:.1} MB")
+        }
     }
 }
 
@@ -90,6 +109,56 @@ pub fn is_hex_color(s: &str) -> bool {
     let hex_part = &s[1..];
     (hex_part.len() == 3 || hex_part.len() == 6 || hex_part.len() == 8)
         && hex_part.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+pub fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let clean = hex.trim().strip_prefix('#')?;
+    if clean.len() == 3 {
+        let r = u8::from_str_radix(&clean[0..1].repeat(2), 16).ok()?;
+        let g = u8::from_str_radix(&clean[1..2].repeat(2), 16).ok()?;
+        let b = u8::from_str_radix(&clean[2..3].repeat(2), 16).ok()?;
+        Some((r, g, b))
+    } else if clean.len() >= 6 {
+        let r = u8::from_str_radix(&clean[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&clean[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&clean[4..6], 16).ok()?;
+        Some((r, g, b))
+    } else {
+        None
+    }
+}
+
+pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> String {
+    let rf = r as f64 / 255.0;
+    let gf = g as f64 / 255.0;
+    let bf = b as f64 / 255.0;
+
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+
+    let (h, s) = if d.abs() < 1e-9 {
+        (0.0, 0.0)
+    } else {
+        let s = d / (1.0 - (2.0 * l - 1.0).abs());
+        let mut h = if (max - rf).abs() < 1e-9 {
+            (gf - bf) / d + if gf < bf { 6.0 } else { 0.0 }
+        } else if (max - gf).abs() < 1e-9 {
+            (bf - rf) / d + 2.0
+        } else {
+            (rf - gf) / d + 4.0
+        };
+        h *= 60.0;
+        (h, s)
+    };
+
+    format!(
+        "{}°, {}%, {}%",
+        h.round() as i64,
+        (s * 100.0).round() as i64,
+        (l * 100.0).round() as i64
+    )
 }
 
 pub fn is_url(s: &str) -> bool {
@@ -118,7 +187,7 @@ pub fn classify_text(text: &str) -> (ClipboardKind, String, Option<String>) {
 
     if is_hex_color(trimmed) {
         let upper_hex = format!("#{}", trimmed[1..].to_uppercase());
-        return (ClipboardKind::Color, upper_hex.clone(), Some("Hex Color".to_string()));
+        return (ClipboardKind::Color, upper_hex, Some("Hex Color".to_string()));
     }
 
     if is_url(trimmed) {
@@ -126,16 +195,19 @@ pub fn classify_text(text: &str) -> (ClipboardKind, String, Option<String>) {
         return (ClipboardKind::Link, trimmed.to_string(), Some(domain));
     }
 
-    if (trimmed.starts_with('/') || (trimmed.len() >= 3 && trimmed.as_bytes()[1] == b':'))
-        && !trimmed.contains('\n')
+    let candidate_path = trimmed.trim_matches('"').trim_matches('\'');
+    let candidate_path = candidate_path.strip_prefix("file://").unwrap_or(candidate_path);
+    if (candidate_path.starts_with('/') || (candidate_path.len() >= 3 && candidate_path.as_bytes()[1] == b':'))
+        && !candidate_path.contains('\n')
+        && !candidate_path.contains('\r')
     {
-        let p = Path::new(trimmed);
+        let p = Path::new(candidate_path);
         if p.exists() {
             let file_name = p
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| trimmed.to_string());
-            return (ClipboardKind::File, trimmed.to_string(), Some(file_name));
+                .unwrap_or_else(|| candidate_path.to_string());
+            return (ClipboardKind::File, candidate_path.to_string(), Some(file_name));
         }
     }
 
@@ -188,24 +260,134 @@ impl ClipboardHistory {
         self.last_content_hash = Some(hash);
 
         // Remove previous duplicate if present to bump to top
-        self.entries.retain(|e| e.content != trimmed);
+        self.entries.retain(|e| e.name != trimmed && e.file_path.as_deref() != Some(trimmed));
 
         self.counter += 1;
-        let id = format!("clip_{}_{}", current_timestamp_ms(), self.counter);
-        let (kind, preview, details) = classify_text(trimmed);
+        let created_at = current_timestamp_ms();
+        let id = format!("clip_{created_at}_{}", self.counter);
 
-        let entry = ClipboardEntry {
-            id,
-            kind,
-            content: trimmed.to_string(),
-            preview: if preview.is_empty() { trimmed.to_string() } else { preview },
-            details,
-            image_data: None,
-            image_dimensions: None,
-            file_size: Some(format_size(trimmed.len())),
-            copied_at_ms: current_timestamp_ms(),
-            app_source,
-            pinned: false,
+        let entry = if is_hex_color(trimmed) {
+            let upper_hex = format!("#{}", trimmed[1..].to_uppercase());
+            let (color_rgb, color_hsl) = if let Some((r, g, b)) = hex_to_rgb(&upper_hex) {
+                (Some(format!("{r}, {g}, {b}")), Some(rgb_to_hsl(r, g, b)))
+            } else {
+                (None, None)
+            };
+            ClipboardEntry {
+                id,
+                kind: ClipboardKind::Color,
+                name: upper_hex.clone(),
+                preview: None,
+                source_app: app_source,
+                created_at,
+                is_pinned: false,
+                char_count: None,
+                word_count: None,
+                link_url: None,
+                link_title: None,
+                link_desc: None,
+                file_path: None,
+                file_size: None,
+                file_type: None,
+                image_dims: None,
+                image_size: None,
+                color_hex: Some(upper_hex),
+                color_rgb,
+                color_hsl,
+            }
+        } else if is_url(trimmed) {
+            let domain = extract_domain(trimmed);
+            ClipboardEntry {
+                id,
+                kind: ClipboardKind::Link,
+                name: trimmed.to_string(),
+                preview: None,
+                source_app: app_source,
+                created_at,
+                is_pinned: false,
+                char_count: None,
+                word_count: None,
+                link_url: Some(trimmed.to_string()),
+                link_title: domain,
+                link_desc: Some(trimmed.to_string()),
+                file_path: None,
+                file_size: None,
+                file_type: None,
+                image_dims: None,
+                image_size: None,
+                color_hex: None,
+                color_rgb: None,
+                color_hsl: None,
+            }
+        } else {
+            let candidate_path = trimmed.trim_matches('"').trim_matches('\'');
+            let candidate_path = candidate_path.strip_prefix("file://").unwrap_or(candidate_path);
+            let p = Path::new(candidate_path);
+            let is_path_syntax = (candidate_path.starts_with('/')
+                || (candidate_path.len() >= 3 && candidate_path.as_bytes()[1] == b':'))
+                && !candidate_path.contains('\n')
+                && !candidate_path.contains('\r');
+
+            if is_path_syntax && p.exists() {
+                let file_name = p
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| candidate_path.to_string());
+                let file_type = p
+                    .extension()
+                    .map(|ext| ext.to_string_lossy().to_string());
+                let file_size = std::fs::metadata(p)
+                    .ok()
+                    .map(|m| format_size(m.len() as usize));
+
+                ClipboardEntry {
+                    id,
+                    kind: ClipboardKind::File,
+                    name: file_name,
+                    preview: None,
+                    source_app: app_source,
+                    created_at,
+                    is_pinned: false,
+                    char_count: None,
+                    word_count: None,
+                    link_url: None,
+                    link_title: None,
+                    link_desc: None,
+                    file_path: Some(candidate_path.to_string()),
+                    file_size,
+                    file_type,
+                    image_dims: None,
+                    image_size: None,
+                    color_hex: None,
+                    color_rgb: None,
+                    color_hsl: None,
+                }
+            } else {
+                let char_count = trimmed.chars().count();
+                let word_count = trimmed.split_whitespace().count();
+                ClipboardEntry {
+                    id,
+                    kind: ClipboardKind::Text,
+                    name: trimmed.to_string(),
+                    preview: None,
+                    source_app: app_source,
+                    created_at,
+                    is_pinned: false,
+                    char_count: Some(char_count),
+                    word_count: Some(word_count),
+                    link_url: None,
+                    link_title: None,
+                    link_desc: None,
+                    file_path: None,
+                    file_size: None,
+                    file_type: None,
+                    image_dims: None,
+                    image_size: None,
+                    color_hex: None,
+                    color_rgb: None,
+                    color_hsl: None,
+                }
+            }
         };
 
         self.entries.insert(0, entry.clone());
@@ -231,7 +413,8 @@ impl ClipboardHistory {
         self.last_content_hash = Some(hash);
 
         self.counter += 1;
-        let id = format!("clip_img_{}_{}", current_timestamp_ms(), self.counter);
+        let created_at = current_timestamp_ms();
+        let id = format!("clip_img_{created_at}_{}", self.counter);
         let base64_png = format!("data:image/png;base64,{}", to_base64(png_bytes));
         let dimensions = format!("{width} × {height}");
         let size_str = format_size(png_bytes.len());
@@ -239,15 +422,24 @@ impl ClipboardHistory {
         let entry = ClipboardEntry {
             id,
             kind: ClipboardKind::Image,
-            content: format!("Screenshot {dimensions}"),
-            preview: format!("Image ({dimensions})"),
-            details: Some(format!("{dimensions} · {size_str}")),
-            image_data: Some(base64_png),
-            image_dimensions: Some(dimensions),
-            file_size: Some(size_str),
-            copied_at_ms: current_timestamp_ms(),
-            app_source,
-            pinned: false,
+            name: format!("Screenshot {dimensions}"),
+            preview: Some(base64_png),
+            source_app: app_source,
+            created_at,
+            is_pinned: false,
+            char_count: None,
+            word_count: None,
+            link_url: None,
+            link_title: None,
+            link_desc: None,
+            file_path: None,
+            file_size: Some(size_str.clone()),
+            file_type: Some("png".to_string()),
+            image_dims: Some(dimensions),
+            image_size: Some(size_str),
+            color_hex: None,
+            color_rgb: None,
+            color_hsl: None,
         };
 
         self.entries.insert(0, entry.clone());
@@ -267,7 +459,7 @@ impl ClipboardHistory {
 
     pub fn clear(&mut self) {
         // Keep pinned entries on clear
-        self.entries.retain(|e| e.pinned);
+        self.entries.retain(|e| e.is_pinned);
         if self.entries.is_empty() {
             self.last_content_hash = None;
         }
@@ -276,8 +468,8 @@ impl ClipboardHistory {
     pub fn toggle_pin(&mut self, id: &str) -> Option<bool> {
         for entry in &mut self.entries {
             if entry.id == id {
-                entry.pinned = !entry.pinned;
-                return Some(entry.pinned);
+                entry.is_pinned = !entry.is_pinned;
+                return Some(entry.is_pinned);
             }
         }
         None
@@ -290,7 +482,7 @@ impl ClipboardHistory {
 
         // Try to remove oldest unpinned entries first
         while self.entries.len() > self.max_entries {
-            if let Some(idx) = self.entries.iter().rposition(|e| !e.pinned) {
+            if let Some(idx) = self.entries.iter().rposition(|e| !e.is_pinned) {
                 self.entries.remove(idx);
             } else {
                 // If all are pinned, remove oldest anyway
@@ -466,10 +658,9 @@ pub fn copy_clipboard_entry(id: String, state: tauri::State<'_, ClipboardState>)
 
     match entry.kind {
         ClipboardKind::Image => {
-            // For images, if we have raw image data
-            if let Some(base64_data) = &entry.image_data {
-                let stripped = base64_data.strip_prefix("data:image/png;base64,").unwrap_or(base64_data);
-                // Decode base64 PNG
+            // For images, decode base64 PNG stored in preview
+            if let Some(data_url) = &entry.preview {
+                let stripped = data_url.strip_prefix("data:image/png;base64,").unwrap_or(data_url);
                 if let Ok(png_bytes) = decode_base64(stripped)
                     && let Ok(decoded_image) = image::load_from_memory(&png_bytes)
                 {
@@ -483,10 +674,14 @@ pub fn copy_clipboard_entry(id: String, state: tauri::State<'_, ClipboardState>)
                     return Ok(());
                 }
             }
-            clipboard.set_text(entry.content).map_err(|e| format!("Failed to set text: {e}"))?;
+            clipboard.set_text(&entry.name).map_err(|e| format!("Failed to set text: {e}"))?;
+        }
+        ClipboardKind::File => {
+            let to_copy = entry.file_path.as_deref().unwrap_or(&entry.name);
+            clipboard.set_text(to_copy).map_err(|e| format!("Failed to set text: {e}"))?;
         }
         _ => {
-            clipboard.set_text(entry.content).map_err(|e| format!("Failed to set text: {e}"))?;
+            clipboard.set_text(&entry.name).map_err(|e| format!("Failed to set text: {e}"))?;
         }
     }
 
@@ -622,8 +817,8 @@ mod tests {
         // Adding 4th prunes oldest
         history.add_text("4".to_string(), None);
         assert_eq!(history.list().len(), 3);
-        assert_eq!(history.list()[0].content, "4");
-        assert_eq!(history.list()[2].content, "2");
+        assert_eq!(history.list()[0].name, "4");
+        assert_eq!(history.list()[2].name, "2");
     }
 
     #[test]
@@ -647,5 +842,103 @@ mod tests {
         let encoded = to_base64(original);
         let decoded = decode_base64(&encoded).expect("Decode should succeed");
         assert_eq!(original.to_vec(), decoded);
+    }
+
+    #[test]
+    fn test_hex_to_rgb_and_rgb_to_hsl() {
+        let (r, g, b) = hex_to_rgb("#3B3550").expect("Valid 6-digit hex");
+        assert_eq!((r, g, b), (59, 53, 80));
+        let hsl = rgb_to_hsl(r, g, b);
+        assert_eq!(hsl, "253°, 20%, 26%");
+
+        let (r2, g2, b2) = hex_to_rgb("#FFF").expect("Valid 3-digit hex");
+        assert_eq!((r2, g2, b2), (255, 255, 255));
+        let hsl2 = rgb_to_hsl(r2, g2, b2);
+        assert_eq!(hsl2, "0°, 0%, 100%");
+
+        let (r3, g3, b3) = hex_to_rgb("#E8663D").expect("Valid hex");
+        assert_eq!((r3, g3, b3), (232, 102, 61));
+        let hsl3 = rgb_to_hsl(r3, g3, b3);
+        assert_eq!(hsl3, "14°, 79%, 57%");
+    }
+
+    #[test]
+    fn test_text_entry_metadata() {
+        let mut history = ClipboardHistory::new(10);
+        let entry = history
+            .add_text("The quick brown fox jumps over the lazy dog".to_string(), Some("Terminal".to_string()))
+            .expect("Should create entry");
+
+        assert_eq!(entry.kind, ClipboardKind::Text);
+        assert_eq!(entry.name, "The quick brown fox jumps over the lazy dog");
+        assert_eq!(entry.char_count, Some(43));
+        assert_eq!(entry.word_count, Some(9));
+        assert!(entry.created_at > 0);
+        assert!(!entry.is_pinned);
+        assert_eq!(entry.source_app, Some("Terminal".to_string()));
+    }
+
+    #[test]
+    fn test_color_entry_metadata() {
+        let mut history = ClipboardHistory::new(10);
+        let entry = history
+            .add_text("#3b3550".to_string(), Some("ColorPicker".to_string()))
+            .expect("Should create color entry");
+
+        assert_eq!(entry.kind, ClipboardKind::Color);
+        assert_eq!(entry.name, "#3B3550");
+        assert_eq!(entry.color_hex, Some("#3B3550".to_string()));
+        assert_eq!(entry.color_rgb, Some("59, 53, 80".to_string()));
+        assert_eq!(entry.color_hsl, Some("253°, 20%, 26%".to_string()));
+        assert!(entry.created_at > 0);
+    }
+
+    #[test]
+    fn test_url_entry_metadata() {
+        let mut history = ClipboardHistory::new(10);
+        let entry = history
+            .add_text("https://swisser.pt/portfolio?ref=lux".to_string(), Some("Firefox".to_string()))
+            .expect("Should create link entry");
+
+        assert_eq!(entry.kind, ClipboardKind::Link);
+        assert_eq!(entry.name, "https://swisser.pt/portfolio?ref=lux");
+        assert_eq!(entry.link_url, Some("https://swisser.pt/portfolio?ref=lux".to_string()));
+        assert_eq!(entry.link_title, Some("swisser.pt".to_string()));
+        assert!(entry.created_at > 0);
+    }
+
+    #[test]
+    fn test_image_entry_metadata() {
+        let mut history = ClipboardHistory::new(10);
+        let dummy_png = b"\x89PNG\r\n\x1a\nfakeimagebytes";
+        let entry = history
+            .add_image(dummy_png, 800, 600, Some("GIMP".to_string()))
+            .expect("Should create image entry");
+
+        assert_eq!(entry.kind, ClipboardKind::Image);
+        assert_eq!(entry.name, "Screenshot 800 × 600");
+        assert_eq!(entry.image_dims, Some("800 × 600".to_string()));
+        assert!(entry.preview.unwrap().starts_with("data:image/png;base64,"));
+        assert!(entry.created_at > 0);
+    }
+
+    #[test]
+    fn test_camel_case_serialization_contract() {
+        let mut history = ClipboardHistory::new(10);
+        let entry = history
+            .add_text("#3b3550".to_string(), Some("DevApp".to_string()))
+            .unwrap();
+
+        let json = serde_json::to_string(&entry).expect("Serialization must succeed");
+        assert!(json.contains("\"createdAt\":"));
+        assert!(json.contains("\"isPinned\":false"));
+        assert!(json.contains("\"sourceApp\":\"DevApp\""));
+        assert!(json.contains("\"colorHex\":\"#3B3550\""));
+        assert!(json.contains("\"colorRgb\":\"59, 53, 80\""));
+        assert!(json.contains("\"colorHsl\":\"253°, 20%, 26%\""));
+
+        // Roundtrip deserialization
+        let deserialized: ClipboardEntry = serde_json::from_str(&json).expect("Deserialization must succeed");
+        assert_eq!(entry, deserialized);
     }
 }

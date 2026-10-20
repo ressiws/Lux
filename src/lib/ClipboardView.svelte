@@ -71,7 +71,10 @@
     }, 1600);
   }
 
-  function formatTimeAgo(timestampMs: number): string {
+  function formatTimeAgo(timestampMs: number | null | undefined): string {
+    if (typeof timestampMs !== "number" || isNaN(timestampMs) || timestampMs <= 0) {
+      return "just now";
+    }
     const diff = Math.max(0, Date.now() - timestampMs);
     const sec = Math.floor(diff / 1000);
     if (sec < 60) return "just now";
@@ -83,7 +86,10 @@
     return `${days} d ago`;
   }
 
-  function getDateGroup(timestampMs: number): "Today" | "Yesterday" | "Earlier" {
+  function getDateGroup(timestampMs: number | null | undefined): "Today" | "Yesterday" | "Earlier" {
+    if (typeof timestampMs !== "number" || isNaN(timestampMs) || timestampMs <= 0) {
+      return "Today";
+    }
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const yesterdayMidnight = todayMidnight - 86400000;
@@ -91,6 +97,15 @@
     if (timestampMs >= todayMidnight) return "Today";
     if (timestampMs >= yesterdayMidnight) return "Yesterday";
     return "Earlier";
+  }
+
+  function safeHostname(urlStr: string | null | undefined): string {
+    if (!urlStr) return "";
+    try {
+      return new URL(urlStr).hostname;
+    } catch {
+      return urlStr;
+    }
   }
 
   const filteredEntries = $derived.by(() => {
@@ -764,13 +779,13 @@
                 <div class="lh">
                   <span class="fv">
                     {(selectedItem.linkUrl
-                      ? new URL(selectedItem.linkUrl).hostname[0]
+                      ? safeHostname(selectedItem.linkUrl)[0] || "L"
                       : "L"
                     ).toUpperCase()}
                   </span>
                   <span>
                     {selectedItem.linkUrl
-                      ? new URL(selectedItem.linkUrl).hostname
+                      ? safeHostname(selectedItem.linkUrl) || "Link"
                       : "Link"}
                   </span>
                 </div>
@@ -856,7 +871,7 @@
             {#if selectedItem.linkUrl}
               <div class="pm">
                 <span>Domain</span>
-                <span>{new URL(selectedItem.linkUrl).hostname}</span>
+                <span>{safeHostname(selectedItem.linkUrl)}</span>
               </div>
               <div class="pm">
                 <span>Address</span>
