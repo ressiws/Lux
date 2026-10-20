@@ -1097,6 +1097,7 @@
   }
 
   .menu h6 {
+    margin: 0;
     font: 500 11.5px Inter, "Segoe UI", system-ui, sans-serif;
     color: var(--dim);
     padding: 6px 8px 4px;
@@ -1571,6 +1572,7 @@
   }
 
   .pop h6 {
+    margin: 0;
     font: 500 11.5px Inter, "Segoe UI", system-ui, sans-serif;
     color: var(--dim);
     padding: 6px 8px 4px;
