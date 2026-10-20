@@ -235,8 +235,16 @@ pub fn run() {
                         }
                     }
                 }
-                WindowEvent::Focused(focused) if win.label() == window::MAIN_WINDOW_LABEL => {
-                    window::handle_window_focus_change(win.app_handle(), *focused);
+                WindowEvent::Focused(focused) => {
+                    match win.label() {
+                        window::MAIN_WINDOW_LABEL => {
+                            window::handle_window_focus_change(win.app_handle(), *focused);
+                        }
+                        window::SETTINGS_WINDOW_LABEL => {
+                            window::handle_settings_focus_change(win.app_handle(), *focused);
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }

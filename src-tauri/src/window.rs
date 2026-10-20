@@ -38,6 +38,8 @@ pub struct LauncherState {
     current_mode: Mutex<WindowMode>,
     frontend_ready: AtomicBool,
     show_on_ready: AtomicBool,
+    settings_shown_at: Mutex<Option<Instant>>,
+    settings_has_gained_focus: AtomicBool,
 }
 
 impl LauncherState {
@@ -51,6 +53,8 @@ impl LauncherState {
             current_mode: Mutex::new(WindowMode::Launcher),
             frontend_ready: AtomicBool::new(false),
             show_on_ready: AtomicBool::new(false),
+            settings_shown_at: Mutex::new(None),
+            settings_has_gained_focus: AtomicBool::new(false),
         }
     }
 
@@ -134,6 +138,55 @@ impl LauncherState {
         let gained_focus = self.has_gained_focus.load(Ordering::SeqCst);
         let elapsed = self
             .shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map(|t| t.elapsed());
+
+        match elapsed {
+            None => false,
+            Some(d) => {
+                // Ignore transient focus loss during the initial window show and DOM settling window
+                if d < Duration::from_millis(150) {
+                    false
+                } else {
+                    gained_focus || d >= Duration::from_millis(1000)
+                }
+            }
+        }
+    }
+
+    pub fn record_settings_shown(&self) {
+        self.settings_has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .settings_shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(Instant::now());
+    }
+
+    pub fn record_settings_focused(&self, focused: bool) {
+        if focused {
+            self.settings_has_gained_focus.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub fn reset_settings_shown(&self) {
+        self.settings_has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .settings_shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+
+    pub fn should_hide_settings_on_focus_loss(&self) -> bool {
+        if self.is_quitting() {
+            return false;
+        }
+
+        let gained_focus = self.settings_has_gained_focus.load(Ordering::SeqCst);
+        let elapsed = self
+            .settings_shown_at
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .map(|t| t.elapsed());
@@ -687,6 +740,10 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .get_webview_window(SETTINGS_WINDOW_LABEL)
         .ok_or_else(|| "Settings window is not available.".to_string())?;
 
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_settings_shown();
+    }
+
     let is_visible = window.is_visible().unwrap_or(false);
     let is_minimized = window.is_minimized().unwrap_or(false);
 
@@ -722,6 +779,10 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 }
 
 pub fn hide_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.reset_settings_shown();
+    }
+
     let window = app
         .get_webview_window(SETTINGS_WINDOW_LABEL)
         .ok_or_else(|| "Settings window is not available.".to_string())?;
@@ -731,6 +792,38 @@ pub fn hide_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .map_err(|err| format!("Failed to hide settings window: {err}"))?;
 
     Ok(())
+}
+
+pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool) {
+    let is_visible = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    if !is_visible {
+        return;
+    }
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_settings_focused(focused);
+    }
+
+    if focused {
+        return;
+    }
+
+    let should_hide = app
+        .try_state::<LauncherState>()
+        .map(|state| state.should_hide_settings_on_focus_loss())
+        .unwrap_or(true);
+
+    if !should_hide {
+        return;
+    }
+
+    if let Err(err) = hide_settings_window(app) {
+        eprintln!("Warning: failed to hide settings on focus loss: {err}");
+    }
 }
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -915,6 +1008,48 @@ mod tests {
         // Quitting prevents dismissal loops
         state.mark_quitting();
         assert!(!state.should_hide_on_focus_loss());
+    }
+
+    #[test]
+    fn settings_focus_loss_lifecycle_dismissal() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt + Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+        );
+
+        // Before shown, does not hide (not in an active session)
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // Immediately when shown, window hasn't gained focus yet -> premature focus loss is ignored
+        state.record_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // During initial settling grace period (<150ms), transient blur is ignored
+        state.record_settings_focused(true);
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // After settling grace period, losing focus dismisses settings
+        std::thread::sleep(Duration::from_millis(160));
+        assert!(state.should_hide_settings_on_focus_loss());
+
+        // Hiding resets state cleanly; unshown state does not trigger hide
+        state.reset_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // Reopening starts with clean state
+        state.record_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+        state.record_settings_focused(true);
+        std::thread::sleep(Duration::from_millis(160));
+        assert!(state.should_hide_settings_on_focus_loss());
+
+        // Quitting prevents dismissal loops
+        state.mark_quitting();
+        assert!(!state.should_hide_settings_on_focus_loss());
     }
 
     #[test]
