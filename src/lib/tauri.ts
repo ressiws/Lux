@@ -121,6 +121,14 @@ export async function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
   });
 }
 
+export async function openSettings(): Promise<void> {
+  return invoke<void>("open_settings");
+}
+
+export async function hideSettings(): Promise<void> {
+  return invoke<void>("hide_settings");
+}
+
 export async function getShortcutsStatus(): Promise<import("./types").ShortcutConfigStatus> {
   return invoke<import("./types").ShortcutConfigStatus>("get_shortcuts_status");
 }

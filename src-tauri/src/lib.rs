@@ -90,6 +90,16 @@ fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    window::show_settings_window(&app)
+}
+
+#[tauri::command]
+fn hide_settings(app: AppHandle) -> Result<(), String> {
+    window::hide_settings_window(&app)
+}
+
+#[tauri::command]
 fn notify_frontend_ready(app: AppHandle, state: State<'_, LauncherState>) -> Result<(), String> {
     state.mark_frontend_ready();
     if state.should_show_on_ready() {
@@ -133,7 +143,9 @@ pub fn run() {
             delete_clipboard_entry,
             clear_clipboard_history,
             toggle_pin_clipboard_entry,
-            notify_frontend_ready
+            notify_frontend_ready,
+            open_settings,
+            hide_settings
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -143,6 +155,10 @@ pub fn run() {
                 .as_ref()
                 .map(window::configure_native_backdrop)
                 .unwrap_or(false);
+
+            if let Some(settings_win) = app.get_webview_window(window::SETTINGS_WINDOW_LABEL) {
+                window::configure_native_backdrop(&settings_win);
+            }
 
             let (configured_shortcut, configured_clipboard_shortcut) =
                 shortcuts::resolve_configured_shortcuts(handle);
@@ -194,9 +210,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|win, event| {
-            if win.label() != window::MAIN_WINDOW_LABEL {
-                return;
-            }
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     let is_quitting = win
@@ -207,12 +220,22 @@ pub fn run() {
 
                     if !is_quitting {
                         api.prevent_close();
-                        if let Err(err) = window::hide_launcher_window(win.app_handle()) {
-                            eprintln!("Warning: failed to hide launcher on close request: {err}");
+                        match win.label() {
+                            window::MAIN_WINDOW_LABEL => {
+                                if let Err(err) = window::hide_launcher_window(win.app_handle()) {
+                                    eprintln!("Warning: failed to hide launcher on close request: {err}");
+                                }
+                            }
+                            window::SETTINGS_WINDOW_LABEL => {
+                                if let Err(err) = window::hide_settings_window(win.app_handle()) {
+                                    eprintln!("Warning: failed to hide settings on close request: {err}");
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                WindowEvent::Focused(focused) => {
+                WindowEvent::Focused(focused) if win.label() == window::MAIN_WINDOW_LABEL => {
                     window::handle_window_focus_change(win.app_handle(), *focused);
                 }
                 _ => {}

@@ -8,11 +8,8 @@
     splitHighlight,
   } from "$lib/mock-data";
   import {
-    clearClipboardHistory,
-    getClipboardHistory,
     getIndexStats,
     getLauncherStatus,
-    getShortcutsStatus,
     hideLauncher,
     notifyFrontendReady,
     onIndexingStatus,
@@ -20,7 +17,7 @@
     onLauncherShown,
     onOpenClipboard,
     onOpenLauncher,
-    onOpenSettings,
+    openSettings,
     openTarget,
     openTargetAsAdmin,
     reindex,
@@ -28,40 +25,37 @@
     searchLauncher,
     setLauncherHeight,
     setWindowHeight,
-    updateShortcuts,
   } from "$lib/tauri";
+  import SettingsView from "$lib/SettingsView.svelte";
+  import {
+    applyThemeAndCaret,
+    loadSettings,
+    onSettingsChanged,
+    type SettingsState,
+  } from "$lib/settings";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import type {
     IndexStats,
     IndexingStatusPayload,
     ItemAction,
     LauncherItem,
     SearchResponse,
-    ShortcutConfigStatus,
   } from "$lib/types";
 
-  type SettingsCategory =
-    | "general"
-    | "appearance"
-    | "search"
-    | "features"
-    | "shortcuts";
-  let activeCategory = $state<SettingsCategory>("general");
-
-  interface SettingsState {
-    theme: "system" | "light" | "dark";
-    layout: "list" | "grid";
-    preview: boolean;
-    login: boolean;
-    progressBar: boolean;
-    caret: boolean;
-    fileSearch: boolean;
+  function getWindowLabel(): string {
+    try {
+      return getCurrentWindow().label;
+    } catch {
+      return "main";
+    }
   }
+
+  const windowLabel = getWindowLabel();
 
   let query = $state("");
   let selectedIndex = $state(0);
   let selectedActionIndex = $state(0);
   let actionsOpen = $state(false);
-  let settingsOpen = $state(false);
   let feedbackMessage = $state("");
   let shortcutWarning = $state("");
   let searchResponse = $state<SearchResponse | undefined>();
@@ -73,22 +67,8 @@
     isIndexed: false,
   });
   let appMode = $state<"launcher" | "clipboard">("launcher");
-  let launcherShortcutInput = $state("Alt+Space");
-  let clipboardShortcutInput = $state("Alt+Shift+V");
-  let shortcutsStatus = $state<ShortcutConfigStatus | null>(null);
-  let shortcutMessage = $state("");
-  let shortcutIsError = $state(false);
-  let clipboardCount = $state(0);
 
-  let settings = $state<SettingsState>({
-    theme: "system",
-    layout: "list",
-    preview: true,
-    login: false,
-    progressBar: true,
-    caret: true,
-    fileSearch: true,
-  });
+  let settings = $state<SettingsState>(loadSettings());
 
   let searchInput: HTMLInputElement | undefined = $state();
   let listContainer: HTMLDivElement | undefined = $state();
@@ -126,7 +106,7 @@
   let isCollapsing = $state(false);
   let collapseTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const shouldExpand = $derived(!isIdle || settingsOpen);
+  const shouldExpand = $derived(!isIdle);
 
   async function syncWindowHeight(expanded: boolean): Promise<void> {
     if (windowExpanded === expanded) return;
@@ -141,7 +121,6 @@
   async function switchMode(mode: "launcher" | "clipboard"): Promise<void> {
     appMode = mode;
     if (mode === "clipboard") {
-      settingsOpen = false;
       actionsOpen = false;
       try {
         await setWindowHeight(560);
@@ -154,57 +133,6 @@
     }
   }
 
-  async function loadShortcutsStatus(): Promise<void> {
-    try {
-      const status = await getShortcutsStatus();
-      shortcutsStatus = status;
-      launcherShortcutInput = status.launcher.shortcut;
-      clipboardShortcutInput = status.clipboard.shortcut;
-    } catch {
-      // Ignore outside Tauri
-    }
-    try {
-      const history = await getClipboardHistory();
-      clipboardCount = history.length;
-    } catch {
-      // Ignore outside Tauri
-    }
-  }
-
-  async function applyShortcuts(): Promise<void> {
-    shortcutMessage = "";
-    shortcutIsError = false;
-    try {
-      const updated = await updateShortcuts(
-        launcherShortcutInput.trim(),
-        clipboardShortcutInput.trim(),
-      );
-      shortcutsStatus = updated;
-      if (!updated.launcher.registered && updated.launcher.error) {
-        shortcutIsError = true;
-        shortcutMessage = `Launcher shortcut: ${updated.launcher.error}`;
-      } else if (!updated.clipboard.registered && updated.clipboard.error) {
-        shortcutIsError = true;
-        shortcutMessage = `Clipboard shortcut: ${updated.clipboard.error}`;
-      } else {
-        shortcutIsError = false;
-        shortcutMessage = "Shortcuts updated and registered successfully.";
-      }
-    } catch (err) {
-      shortcutIsError = true;
-      shortcutMessage = String(err);
-    }
-  }
-
-  async function handleClearClipboardFromSettings(): Promise<void> {
-    try {
-      await clearClipboardHistory();
-      clipboardCount = 0;
-      say("Clipboard history cleared");
-    } catch (err) {
-      say(`Failed to clear: ${err}`);
-    }
-  }
 
   $effect(() => {
     if (appMode !== "launcher") return;
@@ -278,7 +206,6 @@
 
   function resetLauncherState(shouldFocus: boolean): void {
     actionsOpen = false;
-    settingsOpen = false;
     selectedActionIndex = 0;
     query = "";
     selectedIndex = 0;
@@ -341,31 +268,13 @@
     }
   }
 
-  function applyThemeAndCaret(): void {
-    if (typeof document === "undefined") return;
-    const root = document.documentElement;
-    if (settings.theme === "system") {
-      delete root.dataset.theme;
-    } else {
-      root.dataset.theme = settings.theme;
-    }
-    root.style.setProperty(
-      "--caret-color",
-      settings.caret ? "var(--fg)" : "transparent",
-    );
-  }
-
-  function setSetting<K extends keyof SettingsState>(
-    key: K,
-    value: SettingsState[K],
-  ): void {
-    settings[key] = value;
+  async function handleOpenSettings(): Promise<void> {
+    actionsOpen = false;
     try {
-      localStorage.setItem("lux-settings", JSON.stringify(settings));
+      await openSettings();
     } catch {
-      // Ignore if localStorage unavailable
+      // Ignore outside Tauri
     }
-    applyThemeAndCaret();
   }
 
   async function triggerReindex(): Promise<void> {
@@ -377,18 +286,6 @@
       say(`Failed to index: ${err}`);
       isIndexing = false;
     }
-  }
-
-  function toggleSettings(): void {
-    settingsOpen = !settingsOpen;
-    if (settingsOpen) {
-      actionsOpen = false;
-    }
-  }
-
-  function closeSettings(): void {
-    settingsOpen = false;
-    focusSearchInput();
   }
 
   async function copyAndAnnounce(value: string, label: string): Promise<void> {
@@ -403,6 +300,10 @@
     }
     if (item.category === "calc" && item.calc) {
       await copyAndAnnounce(item.calc.raw, item.calc.raw);
+      return;
+    }
+    if (item.name === "Open Lux Settings" || (item.category === "cmd" && item.name.toLowerCase().includes("settings"))) {
+      void handleOpenSettings();
       return;
     }
     if (item.category === "clip" || item.name.toLowerCase().includes("clipboard")) {
@@ -438,7 +339,6 @@
     }
     selectedActionIndex = 0;
     actionsOpen = true;
-    settingsOpen = false;
     focusSearchInput();
   }
 
@@ -587,15 +487,6 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     const count = flatItems.length;
-
-    if (settingsOpen) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeSettings();
-        return;
-      }
-    }
 
     if (
       (event.ctrlKey || event.metaKey) &&
@@ -863,16 +754,7 @@
   }
 
   onMount(() => {
-    try {
-      const saved = localStorage.getItem("lux-settings");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        settings = { ...settings, ...parsed };
-      }
-    } catch {
-      // Ignore parsing errors
-    }
-    applyThemeAndCaret();
+    applyThemeAndCaret(settings);
     focusSearchInput();
     void performSearch("");
     void notifyFrontendReady().catch(() => {});
@@ -883,18 +765,26 @@
       })
       .catch(() => {});
 
-    void loadShortcutsStatus();
-
     let disposed = false;
     let unlistenShown: (() => void) | undefined;
     let unlistenHidden: (() => void) | undefined;
     let unlistenIndexing: (() => void) | undefined;
     let unlistenOpenLauncher: (() => void) | undefined;
     let unlistenOpenClipboard: (() => void) | undefined;
-    let unlistenOpenSettings: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
+
+    void onSettingsChanged((newSettings) => {
+      settings = newSettings;
+      applyThemeAndCaret(settings);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenSettings = unlisten;
+      }
+    });
 
     void onOpenLauncher(() => {
-      settingsOpen = false;
       actionsOpen = false;
       void switchMode("launcher");
     }).then((unlisten) => {
@@ -912,19 +802,6 @@
         unlisten();
       } else {
         unlistenOpenClipboard = unlisten;
-      }
-    });
-
-    void onOpenSettings(() => {
-      appMode = "launcher";
-      settingsOpen = true;
-      actionsOpen = false;
-      void syncWindowHeight(true);
-    }).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        unlistenOpenSettings = unlisten;
       }
     });
 
@@ -999,14 +876,16 @@
       unlistenIndexing?.();
       unlistenOpenLauncher?.();
       unlistenOpenClipboard?.();
-      unlistenOpenSettings?.();
+      unlistenSettings?.();
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("keydown", handleKeydown);
     };
   });
 </script>
 
-{#if appMode === "launcher"}
+{#if windowLabel === "settings"}
+  <SettingsView />
+{:else if appMode === "launcher"}
 <div
   class="win"
   id="win"
@@ -1047,7 +926,7 @@
       type="button"
       aria-label="Open Lux settings"
       onmousedown={preventFocusLossOnMouseDown}
-      onclick={toggleSettings}
+      onclick={handleOpenSettings}
     >
       <svg
         width="18"
@@ -1474,335 +1353,6 @@
 </div>
 {/if}
 
-{#if settingsOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div
-    class="setw-backdrop"
-    role="presentation"
-    onmousedown={preventFocusLossOnMouseDown}
-    onclick={closeSettings}
-  ></div>
-{/if}
-
-<div
-  class="setw"
-  id="setw"
-  role="dialog"
-  aria-label="Lux Settings"
-  hidden={!settingsOpen}
->
-  <div class="stb">
-    <div class="stb-title">
-      <div
-        class="logo"
-        style="width: 20px; height: 20px; border-radius: 5px; background: var(--fg); color: var(--bg); display: grid; place-items: center;"
-      >
-        <svg viewBox="0 0 64 64" width="13" height="13" fill="currentColor">
-          <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
-        </svg>
-      </div>
-      <span>Lux Settings</span>
-    </div>
-    <button
-      id="sx"
-      type="button"
-      aria-label="Close settings"
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={closeSettings}>✕</button
-    >
-  </div>
-  <div class="set-tabs" role="tablist" aria-label="Settings categories">
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "general"}
-      aria-selected={activeCategory === "general"}
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={() => (activeCategory = "general")}
-    >
-      General
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "appearance"}
-      aria-selected={activeCategory === "appearance"}
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={() => (activeCategory = "appearance")}
-    >
-      Appearance
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "search"}
-      aria-selected={activeCategory === "search"}
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={() => (activeCategory = "search")}
-    >
-      Search
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "features"}
-      aria-selected={activeCategory === "features"}
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={() => (activeCategory = "features")}
-    >
-      Features
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "shortcuts"}
-      aria-selected={activeCategory === "shortcuts"}
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={() => (activeCategory = "shortcuts")}
-    >
-      Shortcuts
-    </button>
-  </div>
-
-  <div class="set-body">
-    {#if activeCategory === "general"}
-      <div class="srow">
-        <div>
-          <b>Launch on Startup</b>
-          <small>Start Lux automatically when logging in</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.login}
-          aria-label="Launch on Startup"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={() => setSetting("login", !settings.login)}
-        ></button>
-      </div>
-      <div class="srow">
-        <div>
-          <b>System Index</b>
-          <small>
-            {#if isIndexing}
-              Indexing applications and files…
-            {:else if indexStats.isIndexed}
-              {indexStats.totalApps} apps, {indexStats.totalFiles} files
-            {:else}
-              Index ready
-            {/if}
-          </small>
-        </div>
-        <button
-          class="btn-sub"
-          type="button"
-          disabled={isIndexing}
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={triggerReindex}
-        >
-          {isIndexing ? "Indexing…" : "Re-index now"}
-        </button>
-      </div>
-      <div class="srow">
-        <div>
-          <b>Global Shortcut</b>
-          <small>Show or hide Lux</small>
-        </div>
-        <span class="k"><kbd>Alt</kbd><kbd>Space</kbd></span>
-      </div>
-    {:else if activeCategory === "appearance"}
-      <div class="srow">
-        <div><b>Theme</b></div>
-        <div class="seg" role="group" aria-label="Theme">
-          <button
-            type="button"
-            aria-pressed={settings.theme === "system"}
-            onmousedown={preventFocusLossOnMouseDown}
-            onclick={() => setSetting("theme", "system")}
-          >
-            System
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.theme === "light"}
-            onmousedown={preventFocusLossOnMouseDown}
-            onclick={() => setSetting("theme", "light")}
-          >
-            Light
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.theme === "dark"}
-            onmousedown={preventFocusLossOnMouseDown}
-            onclick={() => setSetting("theme", "dark")}
-          >
-            Dark
-          </button>
-        </div>
-      </div>
-      <div class="srow">
-        <div>
-          <b>Results Layout</b>
-          <small>Display results as a list or grid</small>
-        </div>
-        <div class="seg" role="group" aria-label="Results Layout">
-          <button
-            type="button"
-            aria-pressed={settings.layout === "list"}
-            onmousedown={preventFocusLossOnMouseDown}
-            onclick={() => setSetting("layout", "list")}
-          >
-            List
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.layout === "grid"}
-            onmousedown={preventFocusLossOnMouseDown}
-            onclick={() => setSetting("layout", "grid")}
-          >
-            Grid
-          </button>
-        </div>
-      </div>
-      <div class="srow">
-        <div>
-          <b>Text Caret</b>
-          <small>Show blinking cursor in search bar</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.caret}
-          aria-label="Text Caret"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={() => setSetting("caret", !settings.caret)}
-        ></button>
-      </div>
-    {:else if activeCategory === "search"}
-      <div class="srow">
-        <div>
-          <b>File &amp; Folder Search</b>
-          <small>Search user folders and all indexed drives</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.fileSearch}
-          aria-label="File and folder search"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={() => setSetting("fileSearch", !settings.fileSearch)}
-        ></button>
-      </div>
-    {:else if activeCategory === "features"}
-      <div class="srow">
-        <div>
-          <b>Preview Panel</b>
-          <small>Show details and metadata for selected item</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.preview}
-          aria-label="Preview Panel"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={() => setSetting("preview", !settings.preview)}
-        ></button>
-      </div>
-      <div class="srow">
-        <div>
-          <b>Indexing Progress Bar</b>
-          <small>Show progress indicator while background indexing</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.progressBar}
-          aria-label="Indexing progress bar"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={() => setSetting("progressBar", !settings.progressBar)}
-        ></button>
-      </div>
-    {:else if activeCategory === "shortcuts"}
-      <div class="srow">
-        <div>
-          <b>Launcher Shortcut</b>
-          <small>Global hotkey to show or hide the command launcher</small>
-        </div>
-        <input
-          class="shortcut-input"
-          bind:value={launcherShortcutInput}
-          onblur={applyShortcuts}
-          onkeydown={(e) => {
-            if (e.key === "Enter") applyShortcuts();
-          }}
-          placeholder="e.g. Alt+Space"
-        />
-      </div>
-      <div class="srow">
-        <div>
-          <b>Clipboard History Shortcut</b>
-          <small>Global hotkey to open clipboard history directly</small>
-        </div>
-        <input
-          class="shortcut-input"
-          bind:value={clipboardShortcutInput}
-          onblur={applyShortcuts}
-          onkeydown={(e) => {
-            if (e.key === "Enter") applyShortcuts();
-          }}
-          placeholder="e.g. Alt+Shift+V"
-        />
-      </div>
-
-      {#if (launcherShortcutInput.toLowerCase().includes("win") && launcherShortcutInput.toLowerCase().includes("v")) || (clipboardShortcutInput.toLowerCase().includes("win") && clipboardShortcutInput.toLowerCase().includes("v"))}
-        <div class="shortcut-win-v-notice">
-          ⚠️ <strong>Win + V</strong> is reserved exclusively by Windows for its native clipboard manager and cannot be registered safely by third-party desktop applications. Use <strong>Alt + Shift + V</strong> or another modifier combination.
-        </div>
-      {/if}
-
-      {#if shortcutMessage}
-        <div class="shortcut-status-banner" class:error={shortcutIsError}>
-          {shortcutMessage}
-        </div>
-      {/if}
-
-      <div class="srow">
-        <div>
-          <b>Apply Changes</b>
-          <small>Re-register global shortcuts at runtime</small>
-        </div>
-        <button
-          class="btn-sub"
-          type="button"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={applyShortcuts}
-        >
-          Save Shortcuts
-        </button>
-      </div>
-
-      <div class="srow" style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px;">
-        <div>
-          <b>Clipboard History Storage</b>
-          <small>{clipboardCount} {clipboardCount === 1 ? "entry" : "entries"} stored locally</small>
-        </div>
-        <button
-          class="btn-sub danger"
-          type="button"
-          onmousedown={preventFocusLossOnMouseDown}
-          onclick={handleClearClipboardFromSettings}
-        >
-          Clear History
-        </button>
-      </div>
-    {/if}
-  </div>
-</div>
 
 <style>
   :global(:root) {
@@ -2544,251 +2094,9 @@
     margin: 4px 6px;
   }
 
-  .setw-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 9;
-    background: transparent;
-  }
-
-  .setw {
-    position: fixed;
-    right: 14px;
-    top: 60px;
-    width: 380px;
-    max-width: calc(100% - 28px);
-    max-height: calc(100vh - 74px);
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: thin;
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(24px) saturate(1.4);
-    backdrop-filter: blur(24px) saturate(1.4);
-    box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
-    border-radius: 12px;
-    z-index: 10;
-  }
-
-  .setw[hidden] {
-    display: none;
-  }
-
-  .set-tabs {
-    display: flex;
-    gap: 4px;
-    padding: 8px 12px;
-    background: var(--chip);
-    border-bottom: 1px solid var(--line);
-  }
-
-  .set-tabs button {
-    flex: 1;
-    border: 0;
-    background: none;
-    color: var(--mut);
-    font:
-      500 12px Inter,
-      "Segoe UI",
-      system-ui,
-      sans-serif;
-    padding: 5px 8px;
-    border-radius: 6px;
-    cursor: pointer;
-    white-space: nowrap;
-    text-align: center;
-  }
-
-  .set-tabs button:hover {
-    color: var(--fg);
-  }
-
-  .set-tabs button.active {
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .btn-sub {
-    border: 0;
-    background: var(--chip);
-    color: var(--fg);
-    font:
-      500 12px Inter,
-      "Segoe UI",
-      system-ui,
-      sans-serif;
-    padding: 5px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    flex: none;
-  }
-
-  .btn-sub:hover:not(:disabled) {
-    background: var(--sel);
-  }
-
-  .btn-sub:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .stb {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 10px 10px 16px;
-    font-weight: 500;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .stb-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 600;
-    font-size: 13px;
-  }
-
-  .stb button {
-    background: none;
-    border: 0;
-    color: var(--mut);
-    cursor: pointer;
-    border-radius: 6px;
-    padding: 4px 8px;
-    font-size: 12px;
-  }
-
-  .stb button:hover {
-    background: var(--sel);
-    color: var(--fg);
-  }
-
-  .srow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 11px 16px;
-  }
-
-  .srow b {
-    font-weight: 500;
-    display: block;
-  }
-
-  .srow small {
-    color: var(--mut);
-    font-size: 12px;
-  }
-
-  .seg {
-    display: flex;
-    background: var(--chip);
-    border-radius: 8px;
-    padding: 2px;
-  }
-
-  .seg button {
-    border: 0;
-    background: none;
-    color: var(--mut);
-    font:
-      500 12px Inter,
-      "Segoe UI",
-      system-ui,
-      sans-serif;
-    padding: 5px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .seg button[aria-pressed="true"] {
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: 0 0 0 1px var(--line);
-  }
-
-  .sw {
-    width: 34px;
-    height: 20px;
-    border-radius: 10px;
-    border: 0;
-    background: var(--chip);
-    position: relative;
-    cursor: pointer;
-    flex: none;
-  }
-
-  .sw::after {
-    content: "";
-    position: absolute;
-    left: 2px;
-    top: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--mut);
-    transition: left 0.12s;
-  }
-
-  .sw[aria-checked="true"] {
-    background: var(--fg);
-  }
-
-  .sw[aria-checked="true"]::after {
-    left: 16px;
-    background: var(--bg);
-  }
-
   .clipboard-win {
     height: 560px;
     max-height: 560px;
   }
 
-  .shortcut-input {
-    background: var(--chip);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 5px 8px;
-    color: var(--fg);
-    font: 500 12px Inter, sans-serif;
-    text-align: right;
-    width: 140px;
-    outline: none;
-  }
-
-  .shortcut-input:focus {
-    border-color: var(--mut);
-  }
-
-  .shortcut-win-v-notice {
-    background: rgba(229, 72, 77, 0.1);
-    color: var(--acc);
-    border: 1px solid rgba(229, 72, 77, 0.25);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 11.5px;
-    line-height: 1.4;
-    margin: 6px 0;
-  }
-
-  .shortcut-status-banner {
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 12px;
-    background: var(--chip);
-    color: var(--fg);
-    margin: 6px 0;
-  }
-
-  .shortcut-status-banner.error {
-    background: rgba(229, 72, 77, 0.1);
-    color: var(--acc);
-    border: 1px solid rgba(229, 72, 77, 0.25);
-  }
-
-  .btn-sub.danger {
-    color: var(--acc);
-  }
 </style>

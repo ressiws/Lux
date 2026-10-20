@@ -237,6 +237,7 @@ mod win32_backdrop {
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct POINT {
         pub x: i32,
         pub y: i32,
@@ -339,6 +340,10 @@ pub const LAUNCHER_WIDTH: f64 = 760.0;
 pub const LAUNCHER_HEIGHT_IDLE: f64 = 144.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
 pub const CLIPBOARD_HEIGHT: f64 = 560.0;
+
+pub const SETTINGS_WINDOW_LABEL: &str = "settings";
+pub const SETTINGS_WIDTH: f64 = 480.0;
+pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -511,11 +516,15 @@ fn resolve_resize_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
     resolve_target_monitor(window)
 }
 
-pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
+pub fn position_window_centered<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) {
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let window_physical_size = PhysicalSize::new(
-        (LAUNCHER_WIDTH * scale_factor).round() as u32,
-        (target_height * scale_factor).round() as u32,
+        (width * scale_factor).round() as u32,
+        (height * scale_factor).round() as u32,
     );
     if let Some(monitor) = resolve_target_monitor(window) {
         let work_area = monitor.work_area();
@@ -532,14 +541,18 @@ pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_
             );
             return;
         }
-        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+        let target_logical = tauri::LogicalSize::new(width, height);
         let _ = window.set_size(target_logical);
         let _ = window.set_position(target_pos);
     } else {
-        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+        let target_logical = tauri::LogicalSize::new(width, height);
         let _ = window.set_size(target_logical);
         let _ = window.center();
     }
+}
+
+pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
+    position_window_centered(window, LAUNCHER_WIDTH, target_height);
 }
 
 pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -671,54 +684,53 @@ pub fn show_launcher_window_explicit<R: Runtime>(app: &AppHandle<R>) -> Result<(
 
 pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = app
-        .get_webview_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
-
-    if let Some(state) = app.try_state::<LauncherState>() {
-        state.set_mode(WindowMode::Launcher);
-        state.record_shown();
-    }
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .ok_or_else(|| "Settings window is not available.".to_string())?;
 
     let is_visible = window.is_visible().unwrap_or(false);
     let is_minimized = window.is_minimized().unwrap_or(false);
 
+    if is_minimized {
+        let _ = window.unminimize();
+    }
+
+    if !is_visible {
+        position_window_centered(&window, SETTINGS_WIDTH, SETTINGS_HEIGHT);
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
+    }
+
+    window
+        .show()
+        .map_err(|err| format!("Failed to show settings window: {err}"))?;
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::activate_foreground(hwnd.0);
+    }
+
+    if let Err(err) = window.set_focus() {
+        eprintln!("Warning: failed to focus settings window: {err}");
+    }
+
     let _ = window.emit(EVENT_OPEN_SETTINGS, ());
 
-    if is_visible && !is_minimized {
-        set_launcher_height(app, true)
-    } else {
-        position_on_active_monitor(&window, LAUNCHER_HEIGHT_EXPANDED);
+    Ok(())
+}
 
-        if window.is_minimized().unwrap_or(false)
-            && let Err(err) = window.unminimize()
-        {
-            eprintln!("Warning: failed to unminimize launcher window: {err}");
-        }
+pub fn hide_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .ok_or_else(|| "Settings window is not available.".to_string())?;
 
-        #[cfg(target_os = "windows")]
-        if let Ok(hwnd) = window.hwnd() {
-            win32_backdrop::configure_window_frame(hwnd.0);
-        }
+    window
+        .hide()
+        .map_err(|err| format!("Failed to hide settings window: {err}"))?;
 
-        window
-            .show()
-            .map_err(|err| format!("Failed to show launcher window: {err}"))?;
-
-        #[cfg(target_os = "windows")]
-        if let Ok(hwnd) = window.hwnd() {
-            win32_backdrop::activate_foreground(hwnd.0);
-        }
-
-        if let Err(err) = window.set_focus() {
-            eprintln!("Warning: failed to focus launcher window: {err}");
-        }
-
-        if let Err(err) = window.emit(EVENT_LAUNCHER_SHOWN, ()) {
-            eprintln!("Warning: failed to emit launcher-shown event: {err}");
-        }
-
-        Ok(())
-    }
+    Ok(())
 }
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {

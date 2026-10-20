@@ -971,13 +971,7 @@ pub fn score_app_alias(app_name: &str, query: &str) -> u32 {
                 0
             }
         }
-        "calc" => {
-            if name_low.contains("calculator") {
-                85
-            } else {
-                0
-            }
-        }
+        "calc" if name_low.contains("calculator") => 85,
         _ => 0,
     }
 }
