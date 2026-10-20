@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="Lux banner" width="100%">
+  <img src=".github/assets/banner.svg" alt="Lux banner" width="100%">
 </p>
 
 <p align="center">
