@@ -181,11 +181,9 @@ mod win32_backdrop {
     const DWMWA_BORDER_COLOR: u32 = 34;
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 
-    const DWMWCP_ROUND: u32 = 2;
+    const DWMWCP_DONOTROUND: u32 = 1;
     const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
-    pub const DWMSBT_NONE: u32 = 1;
-    pub const DWMSBT_MAINWINDOW: u32 = 2;
-    pub const DWMSBT_TRANSIENTWINDOW: u32 = 3;
+    const DWMSBT_NONE: u32 = 1;
 
     #[link(name = "dwmapi")]
     unsafe extern "system" {
@@ -209,22 +207,16 @@ mod win32_backdrop {
         }
     }
 
-    pub fn configure_window_frame(hwnd: *mut c_void) -> bool {
+    pub fn configure_window_frame(hwnd: *mut c_void) {
         unsafe {
             strip_native_frame(hwnd);
 
             let _ = set_dwm_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED);
-            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
+            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
             let _ = set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
-
-            let res_acrylic = set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW);
-            let backdrop_applied = if res_acrylic == 0 {
-                true
-            } else {
-                set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW) == 0
-            };
+            let _ = set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
 
             let margins = Margins {
                 cx_left_width: -1,
@@ -233,13 +225,7 @@ mod win32_backdrop {
                 cy_bottom_height: -1,
             };
             let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-            backdrop_applied
         }
-    }
-
-    pub fn set_backdrop(hwnd: *mut c_void, backdrop_type: u32) -> bool {
-        unsafe { set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, backdrop_type) == 0 }
     }
 
     #[link(name = "user32")]
@@ -297,26 +283,13 @@ mod win32_backdrop {
 pub fn configure_native_backdrop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
-        return win32_backdrop::configure_window_frame(hwnd.0);
+        win32_backdrop::configure_window_frame(hwnd.0);
     }
     let _ = window;
     false
 }
 
-pub fn set_native_glass<R: Runtime>(app: &AppHandle<R>, enable: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL)
-        && let Ok(hwnd) = window.hwnd()
-    {
-        let backdrop = if enable {
-            win32_backdrop::DWMSBT_TRANSIENTWINDOW
-        } else {
-            win32_backdrop::DWMSBT_NONE
-        };
-        win32_backdrop::set_backdrop(hwnd.0, backdrop);
-    }
-    let _ = app;
-    let _ = enable;
+pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Result<(), String> {
     Ok(())
 }
 

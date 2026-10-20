@@ -25,10 +25,7 @@
         "maximizable": false,
         "minimizable": false,
         "center": true,
-        "shadow": false,
-        "windowEffects": {
-          "effects": ["acrylic"]
-        }
+        "shadow": false
       }
     ],
     "security": {
