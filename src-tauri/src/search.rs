@@ -889,6 +889,93 @@ pub fn score_match(name: &str, keywords: &str, query: &str) -> u32 {
     0
 }
 
+pub fn score_app_alias(app_name: &str, query: &str) -> u32 {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return 0;
+    }
+    let name_low = app_name.to_lowercase();
+
+    // Check prefix expansions like "vs 2022" or "vscode insiders"
+    if let Some(rest) = q.strip_prefix("vs ") {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            let expanded = format!("visual studio {rest}");
+            let s = score_match(app_name, "", &expanded);
+            if s > 0 {
+                return s;
+            }
+        }
+    }
+    if let Some(rest) = q.strip_prefix("vscode ") {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            let expanded = format!("visual studio code {rest}");
+            let s = score_match(app_name, "", &expanded);
+            if s > 0 {
+                return s;
+            }
+        }
+    }
+    if let Some(rest) = q.strip_prefix("code ") {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            let expanded = format!("visual studio code {rest}");
+            let s = score_match(app_name, "", &expanded);
+            if s > 0 {
+                return s;
+            }
+        }
+    }
+
+    match q.as_str() {
+        "vs" => {
+            if name_low.contains("visual studio") {
+                if name_low.contains("code") {
+                    70
+                } else {
+                    78
+                }
+            } else {
+                0
+            }
+        }
+        "code" => {
+            if name_low.contains("visual studio code") || name_low.contains("vs code") {
+                75
+            } else {
+                0
+            }
+        }
+        "vscode" => {
+            if name_low.contains("visual studio code")
+                || name_low.contains("vs code")
+                || name_low.contains("vscodium")
+            {
+                85
+            } else {
+                0
+            }
+        }
+        "cmd" => {
+            if name_low.contains("command prompt") {
+                85
+            } else {
+                0
+            }
+        }
+        "ps" | "pwsh" => {
+            if name_low.contains("powershell") {
+                80
+            } else {
+                0
+            }
+        }
+        "calc" if name_low.contains("calculator") => 85,
+        _ => 0,
+    }
+}
+
 fn walk_directory_files(
     dir: &Path,
     current_depth: usize,
@@ -1493,7 +1580,9 @@ pub fn search_index(
         .apps
         .iter()
         .filter_map(|app| {
-            let score = score_match(&app.name, &app.keywords, trimmed);
+            let direct_score = score_match(&app.name, &app.keywords, trimmed);
+            let alias_score = score_app_alias(&app.name, trimmed);
+            let score = direct_score.max(alias_score);
             if score > 0 {
                 Some((score, app))
             } else {
@@ -1896,5 +1985,72 @@ mod tests {
         let (apps, _files) = search_index(&index, "Discord");
         assert!(!apps.is_empty(), "Expected to find Discord on development machine");
         assert!(apps[0].name.to_lowercase().contains("discord"));
+    }
+
+    #[test]
+    fn test_application_search_aliases() {
+        let make_app = |name: &str| IndexedApp {
+            name: name.to_string(),
+            subtitle: format!("~/Apps/{name}"),
+            path: PathBuf::from(format!("C:/Apps/{name}.lnk")),
+            location: format!("C:\\Apps\\{name}.exe"),
+            exec: None,
+            icon: None,
+            color: "#5865f2".to_string(),
+            keywords: String::new(),
+            size: None,
+            version: None,
+        };
+
+        let index = SearchIndex {
+            apps: vec![
+                make_app("Visual Studio 2022"),
+                make_app("Visual Studio Code"),
+                make_app("Firefox"),
+                make_app("Discord"),
+                make_app("Code"),
+                make_app("Command Prompt"),
+            ],
+            files: vec![],
+            is_indexed: true,
+        };
+
+        // 1. "vs" matches Visual Studio apps, ranking Visual Studio 2022 above Visual Studio Code
+        let (apps, _) = search_index(&index, "vs");
+        assert!(apps.len() >= 2);
+        assert_eq!(apps[0].name, "Visual Studio 2022");
+        assert_eq!(apps[1].name, "Visual Studio Code");
+
+        // Case insensitivity
+        let (apps_upper, _) = search_index(&index, "VS");
+        assert_eq!(apps_upper[0].name, "Visual Studio 2022");
+
+        // 2. "code" ranks exact match "Code" highest, followed by "Visual Studio Code"
+        let (code_apps, _) = search_index(&index, "code");
+        assert!(code_apps.len() >= 2);
+        assert_eq!(code_apps[0].name, "Code"); // Exact match 100
+        assert_eq!(code_apps[1].name, "Visual Studio Code"); // Alias match 75
+
+        // Case insensitivity
+        let (code_apps_upper, _) = search_index(&index, "CODE");
+        assert_eq!(code_apps_upper[0].name, "Code");
+
+        // 3. "vscode" directly matches Visual Studio Code
+        let (vscode_apps, _) = search_index(&index, "vscode");
+        assert_eq!(vscode_apps.len(), 1);
+        assert_eq!(vscode_apps[0].name, "Visual Studio Code");
+
+        let (vscode_apps_upper, _) = search_index(&index, "VSCode");
+        assert_eq!(vscode_apps_upper.len(), 1);
+        assert_eq!(vscode_apps_upper[0].name, "Visual Studio Code");
+
+        // 4. "cmd" matches Command Prompt
+        let (cmd_apps, _) = search_index(&index, "cmd");
+        assert_eq!(cmd_apps.len(), 1);
+        assert_eq!(cmd_apps[0].name, "Command Prompt");
+
+        // 5. No false positives on unrelated applications
+        let (apps_empty, _) = search_index(&index, "xyznotanapp");
+        assert!(apps_empty.is_empty());
     }
 }

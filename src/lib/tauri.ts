@@ -115,6 +115,20 @@ export async function onOpenClipboard(handler: () => void): Promise<UnlistenFn> 
   });
 }
 
+export async function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("lux://open-settings", () => {
+    handler();
+  });
+}
+
+export async function openSettings(): Promise<void> {
+  return invoke<void>("open_settings");
+}
+
+export async function hideSettings(): Promise<void> {
+  return invoke<void>("hide_settings");
+}
+
 export async function getShortcutsStatus(): Promise<import("./types").ShortcutConfigStatus> {
   return invoke<import("./types").ShortcutConfigStatus>("get_shortcuts_status");
 }
@@ -126,5 +140,31 @@ export async function updateShortcuts(
   return invoke<import("./types").ShortcutConfigStatus>("update_shortcuts", {
     launcher,
     clipboard,
+  });
+}
+
+export async function notifyFrontendReady(): Promise<void> {
+  return invoke<void>("notify_frontend_ready");
+}
+
+export async function getFeaturesConfig(): Promise<import("./types").FeaturesConfig> {
+  return invoke<import("./types").FeaturesConfig>("get_features_config");
+}
+
+export async function setFeatureEnabled(
+  feature: string,
+  enabled: boolean,
+): Promise<import("./types").FeaturesConfig> {
+  return invoke<import("./types").FeaturesConfig>("set_feature_enabled", {
+    feature,
+    enabled,
+  });
+}
+
+export async function onFeaturesChanged(
+  handler: (features: import("./types").FeaturesConfig) => void,
+): Promise<UnlistenFn> {
+  return listen<import("./types").FeaturesConfig>("lux://features-changed", (event) => {
+    handler(event.payload);
   });
 }

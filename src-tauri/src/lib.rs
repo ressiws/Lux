@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod features;
 pub mod search;
 pub mod shortcuts;
 pub mod tray;
@@ -11,6 +12,7 @@ use clipboard::{
     clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
     toggle_pin_clipboard_entry,
 };
+use features::{get_features_config, set_feature_enabled};
 use shortcuts::{get_shortcuts_status, update_shortcuts};
 
 #[tauri::command]
@@ -89,6 +91,26 @@ fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
     window::set_window_target_height(&app, height)
 }
 
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    window::show_settings_window(&app)
+}
+
+#[tauri::command]
+fn hide_settings(app: AppHandle) -> Result<(), String> {
+    window::hide_settings_window(&app)
+}
+
+#[tauri::command]
+fn notify_frontend_ready(app: AppHandle, state: State<'_, LauncherState>) -> Result<(), String> {
+    state.mark_frontend_ready();
+    if state.should_show_on_ready() {
+        state.set_show_on_ready(false);
+        window::show_launcher_window(&app)?;
+    }
+    Ok(())
+}
+
 fn should_show_on_startup() -> bool {
     if std::env::args().any(|arg| arg == "--show") {
         return true;
@@ -122,10 +144,19 @@ pub fn run() {
             copy_clipboard_entry,
             delete_clipboard_entry,
             clear_clipboard_history,
-            toggle_pin_clipboard_entry
+            toggle_pin_clipboard_entry,
+            notify_frontend_ready,
+            open_settings,
+            hide_settings,
+            get_features_config,
+            set_feature_enabled
         ])
         .setup(|app| {
             let handle = app.handle();
+
+            let features_config = features::load_or_default_features_config(handle);
+            let features_state = features::FeaturesState::new(&features_config);
+            app.manage(features_state);
 
             let native_glass_supported = app
                 .get_webview_window(window::MAIN_WINDOW_LABEL)
@@ -133,8 +164,12 @@ pub fn run() {
                 .map(window::configure_native_backdrop)
                 .unwrap_or(false);
 
-            let configured_shortcut = shortcuts::resolve_configured_shortcut();
-            let configured_clipboard_shortcut = shortcuts::resolve_configured_clipboard_shortcut();
+            if let Some(settings_win) = app.get_webview_window(window::SETTINGS_WINDOW_LABEL) {
+                window::configure_native_backdrop(&settings_win);
+            }
+
+            let (configured_shortcut, configured_clipboard_shortcut) =
+                shortcuts::resolve_configured_shortcuts(handle);
             let shortcut_config = shortcuts::register_all_shortcuts(
                 handle,
                 &configured_shortcut,
@@ -160,26 +195,30 @@ pub fn run() {
             ));
 
             let clipboard_state = clipboard::ClipboardState::new(clipboard::DEFAULT_MAX_CLIPBOARD_ENTRIES);
-            let clipboard_history_arc = clipboard_state.history.clone();
+            if features_config.clipboard_history {
+                clipboard_state.start_monitor(handle.clone());
+            }
             app.manage(clipboard_state);
-            clipboard::start_clipboard_monitor(handle.clone(), clipboard_history_arc);
 
             let search_state = search::SearchState::new();
             app.manage(search_state);
             search::start_background_indexing(handle.clone());
 
             if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
-                && let Err(err) = window::show_launcher_window(handle)
+                && let Some(state) = handle.try_state::<LauncherState>()
             {
-                eprintln!("Warning: failed to show launcher window on startup: {err}");
+                if state.is_frontend_ready() {
+                    if let Err(err) = window::show_launcher_window(handle) {
+                        eprintln!("Warning: failed to show launcher window on startup: {err}");
+                    }
+                } else {
+                    state.set_show_on_ready(true);
+                }
             }
 
             Ok(())
         })
         .on_window_event(|win, event| {
-            if win.label() != window::MAIN_WINDOW_LABEL {
-                return;
-            }
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     let is_quitting = win
@@ -190,13 +229,31 @@ pub fn run() {
 
                     if !is_quitting {
                         api.prevent_close();
-                        if let Err(err) = window::hide_launcher_window(win.app_handle()) {
-                            eprintln!("Warning: failed to hide launcher on close request: {err}");
+                        match win.label() {
+                            window::MAIN_WINDOW_LABEL => {
+                                if let Err(err) = window::hide_launcher_window(win.app_handle()) {
+                                    eprintln!("Warning: failed to hide launcher on close request: {err}");
+                                }
+                            }
+                            window::SETTINGS_WINDOW_LABEL => {
+                                if let Err(err) = window::hide_settings_window(win.app_handle()) {
+                                    eprintln!("Warning: failed to hide settings on close request: {err}");
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
                 WindowEvent::Focused(focused) => {
-                    window::handle_window_focus_change(win.app_handle(), *focused);
+                    match win.label() {
+                        window::MAIN_WINDOW_LABEL => {
+                            window::handle_window_focus_change(win.app_handle(), *focused);
+                        }
+                        window::SETTINGS_WINDOW_LABEL => {
+                            window::handle_settings_focus_change(win.app_handle(), *focused);
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }

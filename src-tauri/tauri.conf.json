@@ -26,6 +26,22 @@
         "minimizable": false,
         "center": true,
         "shadow": false
+      },
+      {
+        "label": "settings",
+        "title": "Lux Settings",
+        "width": 480,
+        "height": 540,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "center": true,
+        "shadow": false
       }
     ],
     "security": {

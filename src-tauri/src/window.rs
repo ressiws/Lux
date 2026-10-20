@@ -36,6 +36,10 @@ pub struct LauncherState {
     has_gained_focus: AtomicBool,
     shown_at: Mutex<Option<Instant>>,
     current_mode: Mutex<WindowMode>,
+    frontend_ready: AtomicBool,
+    show_on_ready: AtomicBool,
+    settings_shown_at: Mutex<Option<Instant>>,
+    settings_has_gained_focus: AtomicBool,
 }
 
 impl LauncherState {
@@ -47,6 +51,10 @@ impl LauncherState {
             has_gained_focus: AtomicBool::new(false),
             shown_at: Mutex::new(None),
             current_mode: Mutex::new(WindowMode::Launcher),
+            frontend_ready: AtomicBool::new(false),
+            show_on_ready: AtomicBool::new(false),
+            settings_shown_at: Mutex::new(None),
+            settings_has_gained_focus: AtomicBool::new(false),
         }
     }
 
@@ -60,6 +68,14 @@ impl LauncherState {
             shortcut,
             native_glass_supported: self.native_glass_supported,
         }
+    }
+
+    pub fn update_shortcut_status(&self, status: ShortcutStatus) {
+        let mut guard = self
+            .shortcut_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = status;
     }
 
     pub fn mode(&self) -> WindowMode {
@@ -138,6 +154,71 @@ impl LauncherState {
             }
         }
     }
+
+    pub fn record_settings_shown(&self) {
+        self.settings_has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .settings_shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(Instant::now());
+    }
+
+    pub fn record_settings_focused(&self, focused: bool) {
+        if focused {
+            self.settings_has_gained_focus.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub fn reset_settings_shown(&self) {
+        self.settings_has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .settings_shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+
+    pub fn should_hide_settings_on_focus_loss(&self) -> bool {
+        if self.is_quitting() {
+            return false;
+        }
+
+        let gained_focus = self.settings_has_gained_focus.load(Ordering::SeqCst);
+        let elapsed = self
+            .settings_shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map(|t| t.elapsed());
+
+        match elapsed {
+            None => false,
+            Some(d) => {
+                // Ignore transient focus loss during the initial window show and DOM settling window
+                if d < Duration::from_millis(150) {
+                    false
+                } else {
+                    gained_focus || d >= Duration::from_millis(1000)
+                }
+            }
+        }
+    }
+
+    pub fn mark_frontend_ready(&self) {
+        self.frontend_ready.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_frontend_ready(&self) -> bool {
+        self.frontend_ready.load(Ordering::SeqCst)
+    }
+
+    pub fn set_show_on_ready(&self, show: bool) {
+        self.show_on_ready.store(show, Ordering::SeqCst);
+    }
+
+    pub fn should_show_on_ready(&self) -> bool {
+        self.show_on_ready.load(Ordering::SeqCst)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -155,6 +236,7 @@ mod win32_backdrop {
     const DWMWA_NCRENDERING_POLICY: u32 = 2;
     const DWMNCRP_DISABLED: u32 = 1;
 
+    const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
     const DWMWA_BORDER_COLOR: u32 = 34;
@@ -188,6 +270,9 @@ mod win32_backdrop {
 
     pub fn configure_window_frame(hwnd: *mut c_void) {
         unsafe {
+            strip_native_frame(hwnd);
+
+            let _ = set_dwm_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED);
             let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
@@ -201,9 +286,14 @@ mod win32_backdrop {
                 cy_bottom_height: -1,
             };
             let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-            strip_native_frame(hwnd);
         }
+    }
+
+    #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
+    pub struct POINT {
+        pub x: i32,
+        pub y: i32,
     }
 
     #[link(name = "user32")]
@@ -221,6 +311,18 @@ mod win32_backdrop {
             cy: i32,
             flags: u32,
         ) -> i32;
+        fn GetCursorPos(lp_point: *mut POINT) -> i32;
+    }
+
+    pub fn get_global_cursor_pos() -> Option<(i32, i32)> {
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetCursorPos(&mut pt) != 0 {
+                Some((pt.x, pt.y))
+            } else {
+                None
+            }
+        }
     }
 
     const GWL_STYLE: i32 = -16;
@@ -256,6 +358,22 @@ mod win32_backdrop {
             let _ = SetForegroundWindow(hwnd);
         }
     }
+
+    pub const SWP_NOACTIVATE: u32 = 0x0010;
+
+    pub fn set_window_rect(hwnd: *mut c_void, x: i32, y: i32, cx: i32, cy: i32) {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                cx,
+                cy,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
 }
 
 pub fn configure_native_backdrop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
@@ -276,6 +394,10 @@ pub const LAUNCHER_HEIGHT_IDLE: f64 = 144.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
 pub const CLIPBOARD_HEIGHT: f64 = 560.0;
 
+pub const SETTINGS_WINDOW_LABEL: &str = "settings";
+pub const SETTINGS_WIDTH: f64 = 480.0;
+pub const SETTINGS_HEIGHT: f64 = 540.0;
+
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f64) -> Result<(), String> {
@@ -291,10 +413,33 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         return Ok(());
     }
 
+    let width_physical = (LAUNCHER_WIDTH * scale_factor).round() as u32;
+    let work_area = resolve_resize_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
+
     // When the window is hidden, snap immediately without animation
     if !window.is_visible().unwrap_or(false) {
-        let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
-        let _ = window.set_size(target_logical);
+        if let Some((work_pos, work_size)) = work_area {
+            let target_physical_size = PhysicalSize::new(width_physical, target_physical_height);
+            let target_pos = calculate_launcher_position(target_physical_size, work_pos, work_size);
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = window.hwnd() {
+                win32_backdrop::set_window_rect(
+                    hwnd.0,
+                    target_pos.x,
+                    target_pos.y,
+                    width_physical as i32,
+                    target_physical_height as i32,
+                );
+                return Ok(());
+            }
+            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let _ = window.set_size(target_logical);
+            let _ = window.set_position(target_pos);
+        } else {
+            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let _ = window.set_size(target_logical);
+            let _ = window.center();
+        }
         return Ok(());
     }
 
@@ -315,8 +460,31 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
             // Cubic ease-out: 1.0 - (1.0 - t)^3
             let factor = 1.0 - (1.0 - t).powi(3);
             let current_physical_h = (start_h + (end_h - start_h) * factor).round() as u32;
-            let current_logical_h = current_physical_h as f64 / scale_factor;
-            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+
+            if let Some((work_pos, work_size)) = work_area {
+                let current_size = PhysicalSize::new(width_physical, current_physical_h);
+                let current_pos = calculate_launcher_position(current_size, work_pos, work_size);
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window_clone.hwnd() {
+                    win32_backdrop::set_window_rect(
+                        hwnd.0,
+                        current_pos.x,
+                        current_pos.y,
+                        width_physical as i32,
+                        current_physical_h as i32,
+                    );
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let current_logical_h = current_physical_h as f64 / scale_factor;
+                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                    let _ = window_clone.set_position(current_pos);
+                }
+            } else {
+                let current_logical_h = current_physical_h as f64 / scale_factor;
+                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                let _ = window_clone.center();
+            }
 
             if i < STEPS {
                 std::thread::sleep(std::time::Duration::from_millis(STEP_DELAY_MS));
@@ -324,7 +492,28 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         }
 
         if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
-            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+            if let Some((work_pos, work_size)) = work_area {
+                let end_size = PhysicalSize::new(width_physical, target_physical_height);
+                let end_pos = calculate_launcher_position(end_size, work_pos, work_size);
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window_clone.hwnd() {
+                    win32_backdrop::set_window_rect(
+                        hwnd.0,
+                        end_pos.x,
+                        end_pos.y,
+                        width_physical as i32,
+                        target_physical_height as i32,
+                    );
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                    let _ = window_clone.set_position(end_pos);
+                }
+            } else {
+                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                let _ = window_clone.center();
+            }
         }
     });
 
@@ -349,12 +538,19 @@ pub fn calculate_launcher_position(
     let y_slack = (work_area_size.height as i64 - window_size.height as i64).max(0);
 
     let x = work_area_pos.x + (x_slack / 2) as i32;
-    let y = work_area_pos.y + ((y_slack * 28) / 100) as i32;
+    let y = work_area_pos.y + (y_slack / 2) as i32;
 
     PhysicalPosition::new(x, y)
 }
 
 fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    #[cfg(target_os = "windows")]
+    if let Some((x, y)) = win32_backdrop::get_global_cursor_pos()
+        && let Ok(Some(monitor)) = window.monitor_from_point(x as f64, y as f64)
+    {
+        return Some(monitor);
+    }
+    #[cfg(not(target_os = "windows"))]
     if let Ok(cursor) = window.cursor_position()
         && let Ok(Some(monitor)) = window.monitor_from_point(cursor.x, cursor.y)
     {
@@ -366,20 +562,50 @@ fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
     window.primary_monitor().ok().flatten()
 }
 
-pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>) {
+fn resolve_resize_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        return Some(monitor);
+    }
+    resolve_target_monitor(window)
+}
+
+pub fn position_window_centered<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) {
     let scale_factor = window.scale_factor().unwrap_or(1.0);
-    let full_window_size = PhysicalSize::new(
-        (LAUNCHER_WIDTH * scale_factor).round() as u32,
-        (LAUNCHER_HEIGHT_EXPANDED * scale_factor).round() as u32,
+    let window_physical_size = PhysicalSize::new(
+        (width * scale_factor).round() as u32,
+        (height * scale_factor).round() as u32,
     );
     if let Some(monitor) = resolve_target_monitor(window) {
         let work_area = monitor.work_area();
         let target_pos =
-            calculate_launcher_position(full_window_size, work_area.position, work_area.size);
+            calculate_launcher_position(window_physical_size, work_area.position, work_area.size);
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = window.hwnd() {
+            win32_backdrop::set_window_rect(
+                hwnd.0,
+                target_pos.x,
+                target_pos.y,
+                window_physical_size.width as i32,
+                window_physical_size.height as i32,
+            );
+            return;
+        }
+        let target_logical = tauri::LogicalSize::new(width, height);
+        let _ = window.set_size(target_logical);
         let _ = window.set_position(target_pos);
     } else {
+        let target_logical = tauri::LogicalSize::new(width, height);
+        let _ = window.set_size(target_logical);
         let _ = window.center();
     }
+}
+
+pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
+    position_window_centered(window, LAUNCHER_WIDTH, target_height);
 }
 
 pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -391,8 +617,6 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         state.record_shown();
     }
 
-    position_on_active_monitor(&window);
-
     let mode = app
         .try_state::<LauncherState>()
         .map(|s| s.mode())
@@ -402,13 +626,18 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         WindowMode::Clipboard => CLIPBOARD_HEIGHT,
         WindowMode::Launcher => LAUNCHER_HEIGHT_IDLE,
     };
-    let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
-    let _ = window.set_size(target_logical);
+
+    position_on_active_monitor(&window, target_height);
 
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
     {
         eprintln!("Warning: failed to unminimize launcher window: {err}");
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
     }
 
     window
@@ -490,6 +719,112 @@ pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool)
 
 pub const EVENT_OPEN_LAUNCHER: &str = "lux://open-launcher";
 pub const EVENT_OPEN_CLIPBOARD: &str = "lux://open-clipboard";
+pub const EVENT_OPEN_SETTINGS: &str = "lux://open-settings";
+
+pub fn show_launcher_window_explicit<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.set_mode(WindowMode::Launcher);
+        state.record_shown();
+    }
+
+    let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+    show_launcher_window(app)
+}
+
+pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .ok_or_else(|| "Settings window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_settings_shown();
+    }
+
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+
+    if is_minimized {
+        let _ = window.unminimize();
+    }
+
+    if !is_visible {
+        position_window_centered(&window, SETTINGS_WIDTH, SETTINGS_HEIGHT);
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
+    }
+
+    window
+        .show()
+        .map_err(|err| format!("Failed to show settings window: {err}"))?;
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::activate_foreground(hwnd.0);
+    }
+
+    if let Err(err) = window.set_focus() {
+        eprintln!("Warning: failed to focus settings window: {err}");
+    }
+
+    let _ = window.emit(EVENT_OPEN_SETTINGS, ());
+
+    Ok(())
+}
+
+pub fn hide_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.reset_settings_shown();
+    }
+
+    let window = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .ok_or_else(|| "Settings window is not available.".to_string())?;
+
+    window
+        .hide()
+        .map_err(|err| format!("Failed to hide settings window: {err}"))?;
+
+    Ok(())
+}
+
+pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool) {
+    let is_visible = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    if !is_visible {
+        return;
+    }
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_settings_focused(focused);
+    }
+
+    if focused {
+        return;
+    }
+
+    let should_hide = app
+        .try_state::<LauncherState>()
+        .map(|state| state.should_hide_settings_on_focus_loss())
+        .unwrap_or(true);
+
+    if !should_hide {
+        return;
+    }
+
+    if let Err(err) = hide_settings_window(app) {
+        eprintln!("Warning: failed to hide settings on focus loss: {err}");
+    }
+}
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = app
@@ -512,23 +847,27 @@ pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Stri
                 state.set_mode(WindowMode::Launcher);
                 state.record_shown();
             }
-            let _ = set_launcher_height(app, false);
-            window
-                .emit(EVENT_OPEN_LAUNCHER, ())
-                .map_err(|err| err.to_string())
+            let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+            set_launcher_height(app, false)
         }
     } else {
         if let Some(state) = app.try_state::<LauncherState>() {
             state.set_mode(WindowMode::Launcher);
         }
-        show_launcher_window(app)?;
-        window
-            .emit(EVENT_OPEN_LAUNCHER, ())
-            .map_err(|err| err.to_string())
+        let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+        show_launcher_window(app)
     }
 }
 
 pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let clipboard_enabled = app
+        .try_state::<crate::features::FeaturesState>()
+        .map(|f| f.is_clipboard_history_enabled())
+        .unwrap_or(true);
+    if !clipboard_enabled {
+        return Err("Clipboard History is disabled in Settings.".to_string());
+    }
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -549,19 +888,15 @@ pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
                 state.set_mode(WindowMode::Clipboard);
                 state.record_shown();
             }
-            let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
-            window
-                .emit(EVENT_OPEN_CLIPBOARD, ())
-                .map_err(|err| err.to_string())
+            let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+            set_window_target_height(app, CLIPBOARD_HEIGHT)
         }
     } else {
         if let Some(state) = app.try_state::<LauncherState>() {
             state.set_mode(WindowMode::Clipboard);
         }
-        show_launcher_window(app)?;
-        window
-            .emit(EVENT_OPEN_CLIPBOARD, ())
-            .map_err(|err| err.to_string())
+        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+        show_launcher_window(app)
     }
 }
 
@@ -570,14 +905,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn centers_horizontally_and_places_in_upper_third_vertically() {
+    fn centers_horizontally_and_vertically() {
         let window_size = PhysicalSize::new(680, 430);
         let work_pos = PhysicalPosition::new(0, 0);
         let work_size = PhysicalSize::new(1920, 1040);
 
         let pos = calculate_launcher_position(window_size, work_pos, work_size);
         assert_eq!(pos.x, (1920 - 680) / 2);
-        assert_eq!(pos.y, ((1040 - 430) * 28) / 100);
+        assert_eq!(pos.y, (1040 - 430) / 2);
     }
 
     #[test]
@@ -588,7 +923,46 @@ mod tests {
 
         let pos = calculate_launcher_position(window_size, work_pos, work_size);
         assert_eq!(pos.x, 1920 + (2560 - 680) / 2);
-        assert_eq!(pos.y, 40 + ((1400 - 430) * 28) / 100);
+        assert_eq!(pos.y, 40 + (1400 - 430) / 2);
+    }
+
+    #[test]
+    fn compact_and_expanded_launchers_share_vertical_center() {
+        let work_pos = PhysicalPosition::new(100, 200);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let compact_size = PhysicalSize::new(680, 144);
+        let expanded_size = PhysicalSize::new(680, 500);
+
+        let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
+        let expanded_pos = calculate_launcher_position(expanded_size, work_pos, work_size);
+
+        let compact_center_y = compact_pos.y + (compact_size.height as i32 / 2);
+        let expanded_center_y = expanded_pos.y + (expanded_size.height as i32 / 2);
+        let expected_screen_center_y = work_pos.y + (work_size.height as i32 / 2);
+
+        assert_eq!(compact_center_y, expected_screen_center_y);
+        assert_eq!(expanded_center_y, expected_screen_center_y);
+        assert_eq!(compact_center_y, expanded_center_y);
+    }
+
+    #[test]
+    fn dynamic_height_resizing_keeps_center_anchored_without_drift() {
+        let work_pos = PhysicalPosition::new(0, 40);
+        let work_size = PhysicalSize::new(2560, 1400);
+        let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
+
+        // Sequence of height transitions: compact idle (144), settings / search (500), clipboard (560), back to idle
+        let heights = [144, 250, 380, 500, 560, 300, 144];
+        for h in heights {
+            let size = PhysicalSize::new(760, h);
+            let pos = calculate_launcher_position(size, work_pos, work_size);
+            let center_y = pos.y + (h as i32 / 2);
+            assert_eq!(
+                center_y, screen_center_y,
+                "Height {h} drifted from screen center {screen_center_y}"
+            );
+        }
     }
 
     #[test]
@@ -642,6 +1016,48 @@ mod tests {
         // Quitting prevents dismissal loops
         state.mark_quitting();
         assert!(!state.should_hide_on_focus_loss());
+    }
+
+    #[test]
+    fn settings_focus_loss_lifecycle_dismissal() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt + Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+        );
+
+        // Before shown, does not hide (not in an active session)
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // Immediately when shown, window hasn't gained focus yet -> premature focus loss is ignored
+        state.record_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // During initial settling grace period (<150ms), transient blur is ignored
+        state.record_settings_focused(true);
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // After settling grace period, losing focus dismisses settings
+        std::thread::sleep(Duration::from_millis(160));
+        assert!(state.should_hide_settings_on_focus_loss());
+
+        // Hiding resets state cleanly; unshown state does not trigger hide
+        state.reset_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+
+        // Reopening starts with clean state
+        state.record_settings_shown();
+        assert!(!state.should_hide_settings_on_focus_loss());
+        state.record_settings_focused(true);
+        std::thread::sleep(Duration::from_millis(160));
+        assert!(state.should_hide_settings_on_focus_loss());
+
+        // Quitting prevents dismissal loops
+        state.mark_quitting();
+        assert!(!state.should_hide_settings_on_focus_loss());
     }
 
     #[test]

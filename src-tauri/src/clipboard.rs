@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -494,13 +495,40 @@ impl ClipboardHistory {
 
 pub struct ClipboardState {
     pub history: Arc<Mutex<ClipboardHistory>>,
+    pub monitor_cancel: Arc<AtomicBool>,
+    pub is_monitoring: Arc<AtomicBool>,
 }
 
 impl ClipboardState {
     pub fn new(max_entries: usize) -> Self {
         Self {
             history: Arc::new(Mutex::new(ClipboardHistory::new(max_entries))),
+            monitor_cancel: Arc::new(AtomicBool::new(false)),
+            is_monitoring: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn start_monitor<R: Runtime>(&self, app: AppHandle<R>) {
+        if self
+            .is_monitoring
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.monitor_cancel.store(false, Ordering::SeqCst);
+            let cancel = self.monitor_cancel.clone();
+            let is_monitoring = self.is_monitoring.clone();
+            let history = self.history.clone();
+            start_clipboard_monitor(app, history, cancel, is_monitoring);
+        }
+    }
+
+    pub fn stop_monitor(&self) {
+        self.monitor_cancel.store(true, Ordering::SeqCst);
+        self.is_monitoring.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_monitor_running(&self) -> bool {
+        self.is_monitoring.load(Ordering::SeqCst)
     }
 }
 
@@ -567,7 +595,12 @@ mod win_clipboard {
     }
 }
 
-pub fn start_clipboard_monitor<R: Runtime>(app: AppHandle<R>, state: Arc<Mutex<ClipboardHistory>>) {
+pub fn start_clipboard_monitor<R: Runtime>(
+    app: AppHandle<R>,
+    state: Arc<Mutex<ClipboardHistory>>,
+    cancel: Arc<AtomicBool>,
+    is_monitoring: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
         #[cfg(target_os = "windows")]
         let mut last_seq = win_clipboard::get_sequence_number();
@@ -576,6 +609,10 @@ pub fn start_clipboard_monitor<R: Runtime>(app: AppHandle<R>, state: Arc<Mutex<C
 
         loop {
             std::thread::sleep(Duration::from_millis(400));
+
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
 
             #[cfg(target_os = "windows")]
             {
@@ -639,6 +676,7 @@ pub fn start_clipboard_monitor<R: Runtime>(app: AppHandle<R>, state: Arc<Mutex<C
                 }
             }
         }
+        is_monitoring.store(false, Ordering::SeqCst);
     });
 }
 
