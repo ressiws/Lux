@@ -1788,8 +1788,8 @@
 
 <style>
   :global(:root) {
-    --bg: rgba(251, 251, 253, 0.92);
-    --bgt: rgba(251, 251, 253, 0.92);
+    --bg: rgba(251, 251, 253, 0.82);
+    --bgt: rgba(251, 251, 253, 0.82);
     --fg: #1d1d1f;
     --mut: #6e6e73;
     --dim: #9a9aa0;
@@ -1810,8 +1810,8 @@
 
   @media (prefers-color-scheme: dark) {
     :global(:root:not([data-theme="light"])) {
-      --bg: rgba(10, 10, 12, 0.94);
-      --bgt: rgba(10, 10, 12, 0.94);
+      --bg: rgba(10, 10, 12, 0.78);
+      --bgt: rgba(10, 10, 12, 0.78);
       --fg: #f4f4f5;
       --mut: #a1a1aa;
       --dim: #71717a;
@@ -1830,8 +1830,8 @@
   }
 
   :global(:root[data-theme="dark"]) {
-    --bg: rgba(10, 10, 12, 0.94);
-    --bgt: rgba(10, 10, 12, 0.94);
+    --bg: rgba(10, 10, 12, 0.78);
+    --bgt: rgba(10, 10, 12, 0.78);
     --fg: #f4f4f5;
     --mut: #a1a1aa;
     --dim: #71717a;
@@ -1849,8 +1849,8 @@
   }
 
   :global(:root[data-theme="light"]) {
-    --bg: rgba(251, 251, 253, 0.92);
-    --bgt: rgba(251, 251, 253, 0.92);
+    --bg: rgba(251, 251, 253, 0.82);
+    --bgt: rgba(251, 251, 253, 0.82);
     --fg: #1d1d1f;
     --mut: #6e6e73;
     --dim: #9a9aa0;
