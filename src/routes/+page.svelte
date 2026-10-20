@@ -14,6 +14,7 @@
     getLauncherStatus,
     getShortcutsStatus,
     hideLauncher,
+    notifyFrontendReady,
     onIndexingStatus,
     onLauncherHidden,
     onLauncherShown,
@@ -873,6 +874,7 @@
     applyThemeAndCaret();
     focusSearchInput();
     void performSearch("");
+    void notifyFrontendReady().catch(() => {});
 
     void getIndexStats()
       .then((stats) => {

@@ -128,3 +128,7 @@ export async function updateShortcuts(
     clipboard,
   });
 }
+
+export async function notifyFrontendReady(): Promise<void> {
+  return invoke<void>("notify_frontend_ready");
+}

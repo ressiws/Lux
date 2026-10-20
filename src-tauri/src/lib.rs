@@ -89,6 +89,16 @@ fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
     window::set_window_target_height(&app, height)
 }
 
+#[tauri::command]
+fn notify_frontend_ready(app: AppHandle, state: State<'_, LauncherState>) -> Result<(), String> {
+    state.mark_frontend_ready();
+    if state.should_show_on_ready() {
+        state.set_show_on_ready(false);
+        window::show_launcher_window(&app)?;
+    }
+    Ok(())
+}
+
 fn should_show_on_startup() -> bool {
     if std::env::args().any(|arg| arg == "--show") {
         return true;
@@ -122,7 +132,8 @@ pub fn run() {
             copy_clipboard_entry,
             delete_clipboard_entry,
             clear_clipboard_history,
-            toggle_pin_clipboard_entry
+            toggle_pin_clipboard_entry,
+            notify_frontend_ready
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -169,9 +180,15 @@ pub fn run() {
             search::start_background_indexing(handle.clone());
 
             if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
-                && let Err(err) = window::show_launcher_window(handle)
+                && let Some(state) = handle.try_state::<LauncherState>()
             {
-                eprintln!("Warning: failed to show launcher window on startup: {err}");
+                if state.is_frontend_ready() {
+                    if let Err(err) = window::show_launcher_window(handle) {
+                        eprintln!("Warning: failed to show launcher window on startup: {err}");
+                    }
+                } else {
+                    state.set_show_on_ready(true);
+                }
             }
 
             Ok(())

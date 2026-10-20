@@ -36,6 +36,8 @@ pub struct LauncherState {
     has_gained_focus: AtomicBool,
     shown_at: Mutex<Option<Instant>>,
     current_mode: Mutex<WindowMode>,
+    frontend_ready: AtomicBool,
+    show_on_ready: AtomicBool,
 }
 
 impl LauncherState {
@@ -47,6 +49,8 @@ impl LauncherState {
             has_gained_focus: AtomicBool::new(false),
             shown_at: Mutex::new(None),
             current_mode: Mutex::new(WindowMode::Launcher),
+            frontend_ready: AtomicBool::new(false),
+            show_on_ready: AtomicBool::new(false),
         }
     }
 
@@ -138,6 +142,22 @@ impl LauncherState {
             }
         }
     }
+
+    pub fn mark_frontend_ready(&self) {
+        self.frontend_ready.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_frontend_ready(&self) -> bool {
+        self.frontend_ready.load(Ordering::SeqCst)
+    }
+
+    pub fn set_show_on_ready(&self, show: bool) {
+        self.show_on_ready.store(show, Ordering::SeqCst);
+    }
+
+    pub fn should_show_on_ready(&self) -> bool {
+        self.show_on_ready.load(Ordering::SeqCst)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -155,6 +175,7 @@ mod win32_backdrop {
     const DWMWA_NCRENDERING_POLICY: u32 = 2;
     const DWMNCRP_DISABLED: u32 = 1;
 
+    const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
     const DWMWA_BORDER_COLOR: u32 = 34;
@@ -188,6 +209,9 @@ mod win32_backdrop {
 
     pub fn configure_window_frame(hwnd: *mut c_void) {
         unsafe {
+            strip_native_frame(hwnd);
+
+            let _ = set_dwm_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED);
             let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
@@ -201,8 +225,6 @@ mod win32_backdrop {
                 cy_bottom_height: -1,
             };
             let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-            strip_native_frame(hwnd);
         }
     }
 
@@ -411,6 +433,11 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         eprintln!("Warning: failed to unminimize launcher window: {err}");
     }
 
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
+    }
+
     window
         .show()
         .map_err(|err| format!("Failed to show launcher window: {err}"))?;
@@ -512,19 +539,15 @@ pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Stri
                 state.set_mode(WindowMode::Launcher);
                 state.record_shown();
             }
-            let _ = set_launcher_height(app, false);
-            window
-                .emit(EVENT_OPEN_LAUNCHER, ())
-                .map_err(|err| err.to_string())
+            let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+            set_launcher_height(app, false)
         }
     } else {
         if let Some(state) = app.try_state::<LauncherState>() {
             state.set_mode(WindowMode::Launcher);
         }
-        show_launcher_window(app)?;
-        window
-            .emit(EVENT_OPEN_LAUNCHER, ())
-            .map_err(|err| err.to_string())
+        let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+        show_launcher_window(app)
     }
 }
 
@@ -549,19 +572,15 @@ pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
                 state.set_mode(WindowMode::Clipboard);
                 state.record_shown();
             }
-            let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
-            window
-                .emit(EVENT_OPEN_CLIPBOARD, ())
-                .map_err(|err| err.to_string())
+            let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+            set_window_target_height(app, CLIPBOARD_HEIGHT)
         }
     } else {
         if let Some(state) = app.try_state::<LauncherState>() {
             state.set_mode(WindowMode::Clipboard);
         }
-        show_launcher_window(app)?;
-        window
-            .emit(EVENT_OPEN_CLIPBOARD, ())
-            .map_err(|err| err.to_string())
+        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+        show_launcher_window(app)
     }
 }
 
