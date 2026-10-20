@@ -1,0 +1,518 @@
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+use tauri::{
+    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow,
+};
+
+use crate::shortcuts::ShortcutStatus;
+
+pub const MAIN_WINDOW_LABEL: &str = "main";
+pub const EVENT_LAUNCHER_SHOWN: &str = "lux://launcher-shown";
+pub const EVENT_LAUNCHER_HIDDEN: &str = "lux://launcher-hidden";
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherStatus {
+    pub shortcut: ShortcutStatus,
+    pub native_glass_supported: bool,
+}
+
+pub struct LauncherState {
+    shortcut_status: Mutex<ShortcutStatus>,
+    native_glass_supported: bool,
+    quitting: AtomicBool,
+    has_gained_focus: AtomicBool,
+    shown_at: Mutex<Option<Instant>>,
+}
+
+impl LauncherState {
+    pub fn new(shortcut_status: ShortcutStatus, native_glass_supported: bool) -> Self {
+        Self {
+            shortcut_status: Mutex::new(shortcut_status),
+            native_glass_supported,
+            quitting: AtomicBool::new(false),
+            has_gained_focus: AtomicBool::new(false),
+            shown_at: Mutex::new(None),
+        }
+    }
+
+    pub fn status(&self) -> LauncherStatus {
+        let shortcut = self
+            .shortcut_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        LauncherStatus {
+            shortcut,
+            native_glass_supported: self.native_glass_supported,
+        }
+    }
+
+    pub fn mark_quitting(&self) {
+        self.quitting.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_quitting(&self) -> bool {
+        self.quitting.load(Ordering::SeqCst)
+    }
+
+    pub fn record_shown(&self) {
+        self.has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(Instant::now());
+    }
+
+    pub fn record_focused(&self, focused: bool) {
+        if focused {
+            self.has_gained_focus.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub fn reset_shown(&self) {
+        self.has_gained_focus.store(false, Ordering::SeqCst);
+        let mut guard = self
+            .shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+
+    pub fn should_hide_on_focus_loss(&self) -> bool {
+        if self.is_quitting() {
+            return false;
+        }
+
+        let gained_focus = self.has_gained_focus.load(Ordering::SeqCst);
+        let elapsed = self
+            .shown_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map(|t| t.elapsed());
+
+        match elapsed {
+            None => false,
+            Some(d) => gained_focus || d >= Duration::from_millis(400),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod win32_backdrop {
+    use std::ffi::c_void;
+
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
+
+    const DWMWCP_ROUND: u32 = 2;
+    const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+    const DWMSBT_NONE: u32 = 1;
+
+    const WCA_ACCENT_POLICY: u32 = 19;
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+
+    #[repr(C)]
+    struct AccentPolicy {
+        accent_state: u32,
+        accent_flags: u32,
+        gradient_color: u32,
+        animation_id: u32,
+    }
+
+    #[repr(C)]
+    struct WindowCompositionAttribData {
+        attrib: u32,
+        pv_data: *mut c_void,
+        cb_data: usize,
+    }
+
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: *mut c_void,
+            dw_attribute: u32,
+            pv_attribute: *const c_void,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleA(lp_module_name: *const i8) -> *mut c_void;
+        fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const i8) -> *mut c_void;
+    }
+
+    type SetWindowCompositionAttributeFn =
+        unsafe extern "system" fn(*mut c_void, *mut WindowCompositionAttribData) -> i32;
+
+    unsafe fn set_dwm_u32(hwnd: *mut c_void, attr: u32, value: u32) -> i32 {
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                attr,
+                (&raw const value).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            )
+        }
+    }
+
+    pub fn apply_translucent_acrylic(hwnd: *mut c_void, r: u8, g: u8, b: u8, a: u8) -> bool {
+        let alpha = a.max(1);
+        let gradient_color = (r as u32)
+            | ((g as u32) << 8)
+            | ((b as u32) << 16)
+            | ((alpha as u32) << 24);
+
+        let mut policy = AccentPolicy {
+            accent_state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+            accent_flags: 0,
+            gradient_color,
+            animation_id: 0,
+        };
+
+        let mut data = WindowCompositionAttribData {
+            attrib: WCA_ACCENT_POLICY,
+            pv_data: (&raw mut policy).cast::<c_void>(),
+            cb_data: std::mem::size_of::<AccentPolicy>(),
+        };
+
+        unsafe {
+            let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
+            let _ = set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
+            let _ = set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
+
+            let user32 = GetModuleHandleA(c"user32.dll".as_ptr());
+            if user32.is_null() {
+                return false;
+            }
+            let proc_addr = GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr());
+            if proc_addr.is_null() {
+                return false;
+            }
+            let set_wca: SetWindowCompositionAttributeFn = std::mem::transmute(proc_addr);
+            set_wca(hwnd, &raw mut data) != 0
+        }
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+        fn BringWindowToTop(hwnd: *mut c_void) -> i32;
+        fn GetWindowLongA(hwnd: *mut c_void, n_index: i32) -> i32;
+        fn SetWindowLongA(hwnd: *mut c_void, n_index: i32, new_long: i32) -> i32;
+        fn SetWindowPos(
+            hwnd: *mut c_void,
+            hwnd_insert_after: *mut c_void,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+    }
+
+    const GWL_STYLE: i32 = -16;
+    const WS_CAPTION: i32 = 0x00C0_0000;
+    const WS_SYSMENU: i32 = 0x0008_0000;
+    const WS_THICKFRAME: i32 = 0x0004_0000;
+    const WS_POPUP: i32 = -0x8000_0000;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    pub fn strip_native_frame(hwnd: *mut c_void) {
+        unsafe {
+            let style = GetWindowLongA(hwnd, GWL_STYLE);
+            let new_style = (style & !(WS_CAPTION | WS_SYSMENU | WS_THICKFRAME)) | WS_POPUP;
+            SetWindowLongA(hwnd, GWL_STYLE, new_style);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+        }
+    }
+
+    pub fn activate_foreground(hwnd: *mut c_void) {
+        unsafe {
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+pub fn configure_native_backdrop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(hwnd) = window.hwnd() {
+            win32_backdrop::strip_native_frame(hwnd.0);
+            if win32_backdrop::apply_translucent_acrylic(hwnd.0, 16, 16, 20, 65) {
+                return true;
+            }
+        }
+
+        use tauri::window::{Color, Effect, EffectsBuilder};
+        let effects = EffectsBuilder::new()
+            .effect(Effect::Acrylic)
+            .color(Color(16, 16, 20, 65))
+            .build();
+        match window.set_effects(effects) {
+            Ok(()) => true,
+            Err(err) => {
+                eprintln!("Warning: failed to enable Windows Acrylic backdrop: {err}");
+                false
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, WebKitGTK and composite window managers (KWin, Mutter, Wayland compositors)
+        // render transparent webviews directly. Native glass/blur CSS is active.
+        let _ = window;
+        true
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = window;
+        false
+    }
+}
+
+pub fn calculate_launcher_position(
+    window_size: PhysicalSize<u32>,
+    work_area_pos: PhysicalPosition<i32>,
+    work_area_size: PhysicalSize<u32>,
+) -> PhysicalPosition<i32> {
+    let x_slack = (work_area_size.width as i64 - window_size.width as i64).max(0);
+    let y_slack = (work_area_size.height as i64 - window_size.height as i64).max(0);
+
+    let x = work_area_pos.x + (x_slack / 2) as i32;
+    let y = work_area_pos.y + ((y_slack * 28) / 100) as i32;
+
+    PhysicalPosition::new(x, y)
+}
+
+fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    if let Ok(cursor) = window.cursor_position()
+        && let Ok(Some(monitor)) = window.monitor_from_point(cursor.x, cursor.y)
+    {
+        return Some(monitor);
+    }
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        return Some(monitor);
+    }
+    window.primary_monitor().ok().flatten()
+}
+
+pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>) {
+    let Ok(window_size) = window.outer_size() else {
+        return;
+    };
+    if let Some(monitor) = resolve_target_monitor(window) {
+        let work_area = monitor.work_area();
+        let target_pos =
+            calculate_launcher_position(window_size, work_area.position, work_area.size);
+        let _ = window.set_position(target_pos);
+    } else {
+        let _ = window.center();
+    }
+}
+
+pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_shown();
+    }
+
+    position_on_active_monitor(&window);
+
+    if window.is_minimized().unwrap_or(false)
+        && let Err(err) = window.unminimize()
+    {
+        eprintln!("Warning: failed to unminimize launcher window: {err}");
+    }
+
+    window
+        .show()
+        .map_err(|err| format!("Failed to show launcher window: {err}"))?;
+
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::activate_foreground(hwnd.0);
+    }
+
+    if let Err(err) = window.set_focus() {
+        eprintln!("Warning: failed to focus launcher window: {err}");
+    }
+
+    if let Err(err) = window.emit(EVENT_LAUNCHER_SHOWN, ()) {
+        eprintln!("Warning: failed to emit launcher-shown event: {err}");
+    }
+
+    Ok(())
+}
+
+pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.reset_shown();
+    }
+
+    if let Err(err) = window.emit(EVENT_LAUNCHER_HIDDEN, ()) {
+        eprintln!("Warning: failed to emit launcher-hidden event: {err}");
+    }
+
+    window
+        .hide()
+        .map_err(|err| format!("Failed to hide launcher window: {err}"))?;
+
+    Ok(())
+}
+
+pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool) {
+    let is_visible = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    // If the window is not currently visible, ignore all focus events.
+    // This guarantees that stale or delayed focus-loss events from a previous hide
+    // cycle cannot dismiss a newly reopened launcher or corrupt its focus state.
+    if !is_visible {
+        return;
+    }
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.record_focused(focused);
+    }
+
+    if focused {
+        return;
+    }
+
+    let should_hide = app
+        .try_state::<LauncherState>()
+        .map(|state| state.should_hide_on_focus_loss())
+        .unwrap_or(true);
+
+    if !should_hide {
+        return;
+    }
+
+    if let Err(err) = hide_launcher_window(app) {
+        eprintln!("Warning: failed to hide launcher on focus loss: {err}");
+    }
+}
+
+pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+
+    if is_visible && !is_minimized {
+        hide_launcher_window(app)
+    } else {
+        show_launcher_window(app)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centers_horizontally_and_places_in_upper_third_vertically() {
+        let window_size = PhysicalSize::new(680, 430);
+        let work_pos = PhysicalPosition::new(0, 0);
+        let work_size = PhysicalSize::new(1920, 1040);
+
+        let pos = calculate_launcher_position(window_size, work_pos, work_size);
+        assert_eq!(pos.x, (1920 - 680) / 2);
+        assert_eq!(pos.y, ((1040 - 430) * 28) / 100);
+    }
+
+    #[test]
+    fn respects_secondary_monitor_work_area_offset() {
+        let window_size = PhysicalSize::new(680, 430);
+        let work_pos = PhysicalPosition::new(1920, 40);
+        let work_size = PhysicalSize::new(2560, 1400);
+
+        let pos = calculate_launcher_position(window_size, work_pos, work_size);
+        assert_eq!(pos.x, 1920 + (2560 - 680) / 2);
+        assert_eq!(pos.y, 40 + ((1400 - 430) * 28) / 100);
+    }
+
+    #[test]
+    fn clamps_to_work_area_origin_when_display_is_smaller_than_window() {
+        let window_size = PhysicalSize::new(680, 430);
+        let work_pos = PhysicalPosition::new(10, 20);
+        let work_size = PhysicalSize::new(500, 300);
+
+        let pos = calculate_launcher_position(window_size, work_pos, work_size);
+        assert_eq!(pos.x, 10);
+        assert_eq!(pos.y, 20);
+    }
+
+    #[test]
+    fn focus_loss_lifecycle_dismissal() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt + Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+        );
+
+        // Before shown, does not hide (not in an active session)
+        assert!(!state.should_hide_on_focus_loss());
+
+        // Immediately when shown, window hasn't gained focus yet -> premature focus loss is ignored
+        state.record_shown();
+        assert!(!state.should_hide_on_focus_loss());
+
+        // Once window gains focus, ANY subsequent focus loss dismisses immediately (0ms delay)
+        state.record_focused(true);
+        assert!(state.should_hide_on_focus_loss());
+
+        // Hiding resets state cleanly; unshown state does not trigger hide
+        state.reset_shown();
+        assert!(!state.should_hide_on_focus_loss());
+
+        // Reopening starts with clean state
+        state.record_shown();
+        assert!(!state.should_hide_on_focus_loss());
+        state.record_focused(true);
+        assert!(state.should_hide_on_focus_loss());
+
+        // Quitting prevents dismissal loops
+        state.mark_quitting();
+        assert!(!state.should_hide_on_focus_loss());
+    }
+}

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64" fill="none">
+  <!-- Symbol -->
+  <g transform="translate(4, 0)">
+    <path d="M 8 10 H 20 V 40 L 42 18 H 54 L 32 40 H 54 V 50 H 8 Z" fill="#0A0A0B" />
+  </g>
+
+  <!-- Wordmark: L U X (Drawn as pure vector paths) -->
+  <g fill="#0A0A0B">
+    <!-- L -->
+    <path d="M 88 16 H 98 V 42 H 116 V 50 H 88 Z" />
+    
+    <!-- U -->
+    <path d="M 126 16 H 136 V 38 C 136 43 139 46 144 46 C 149 46 152 43 152 38 V 16 H 162 V 38 C 162 48 155 52 144 52 C 133 52 126 48 126 38 Z" />
+    
+    <!-- X -->
+    <path d="M 172 16 H 183 L 194 32 L 205 16 H 216 L 200 39 L 217 50 H 205 L 194 39 L 183 50 H 171 L 188 33 Z" />
+  </g>
+</svg>

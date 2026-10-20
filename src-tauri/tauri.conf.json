@@ -12,9 +12,20 @@
   "app": {
     "windows": [
       {
-        "title": "lux",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Lux",
+        "width": 680,
+        "height": 430,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "center": true,
+        "shadow": false
       }
     ],
     "security": {

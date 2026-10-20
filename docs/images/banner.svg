@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 440" width="1280" height="440" fill="none">
+  <defs>
+    <!-- Iluminação de fundo refinada -->
+    <radialGradient id="lux-glow" cx="25%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#15171E" />
+      <stop offset="55%" stop-color="#0A0B0E" />
+      <stop offset="100%" stop-color="#050607" />
+    </radialGradient>
+
+    <!-- Gradiente sutil para a janela do aplicativo -->
+    <linearGradient id="window-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#121318" />
+      <stop offset="100%" stop-color="#0C0D11" />
+    </linearGradient>
+
+    <!-- Grade técnica ultradiscreta -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#FFFFFF" stroke-width="1" stroke-opacity="0.02" />
+    </pattern>
+  </defs>
+
+  <!-- Canvas de fundo -->
+  <rect width="1280" height="440" fill="url(#lux-glow)" />
+  <rect width="1280" height="440" fill="url(#grid)" />
+  <rect x="0.5" y="0.5" width="1279" height="439" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" />
+
+  <!-- ============================================== -->
+  <!-- 1. LADO ESQUERDO: IDENTIDADE PRINCIPAL "LUX"   -->
+  <!-- ============================================== -->
+  <g transform="translate(100, 160)">
+    <!-- Símbolo Exato (logo.svg original) -->
+    <g transform="scale(1.9)">
+      <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" fill="#FFFFFF" />
+    </g>
+
+    <!-- Tipografia "Lux" -->
+    <g fill="#FFFFFF" transform="translate(126, 12)">
+      <!-- L -->
+      <path d="M 0 16 H 14 V 62 H 44 V 74 H 0 Z" />
+      <!-- u -->
+      <path d="M 58 31 H 72 V 62 C 72 67 76 71 82 71 C 88 71 93 67 93 62 V 31 H 107 V 74 H 94 V 68 C 89 73 84 75 77 75 C 64 75 58 66 58 54 Z" />
+      <!-- x -->
+      <path d="M 119 31 H 135 L 149 53 L 163 31 H 179 L 158 61 L 181 74 H 165 L 149 63 L 133 74 H 117 L 140 61 Z" />
+    </g>
+
+    <!-- Subtítulo e Especificações de Produto -->
+    <text x="2" y="132" fill="#FFFFFF" fill-opacity="0.85" font-family="-apple-system, BlinkMacSystemFont, &#39;Segoe UI&#39;, Roboto, sans-serif" font-size="13" font-weight="500" letter-spacing="0.2">
+      Universal desktop launcher for power users.
+    </text>
+    <text x="2" y="154" fill="#FFFFFF" fill-opacity="0.35" font-family="monospace" font-size="11" letter-spacing="1">
+      WINDOWS • LINUX • OPEN-SOURCE
+    </text>
+  </g>
+
+  <!-- ==================================================== -->
+  <!-- 2. LADO DIREITO: WIREFRAME MINIMALISTA DA APLICAÇÃO   -->
+  <!-- ==================================================== -->
+  <g transform="translate(640, 75)">
+    <!-- Sombra de elevação da janela -->
+    <rect x="-4" y="8" width="548" height="294" rx="12" fill="#000000" fill-opacity="0.4" />
+
+    <!-- Janela Principal -->
+    <rect width="540" height="290" rx="10" fill="url(#window-bg)" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="1" />
+
+    <!-- Barra de Busca (Search bar) -->
+    <line x1="0" y1="50" x2="540" y2="50" stroke="#FFFFFF" stroke-opacity="0.06" />
+    
+    <!-- Ícone de busca minimalista -->
+    <circle cx="28" cy="25" r="4.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="1.2" />
+    <line x1="31.5" y1="28.5" x2="35.5" y2="32.5" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="1.2" stroke-linecap="round" />
+
+    <!-- Placeholder da barra de busca -->
+    <rect x="46" y="22" width="130" height="6" rx="3" fill="#FFFFFF" fill-opacity="0.25" />
+
+    <!-- Indicador de filtro / tag pill -->
+    <rect x="462" y="16" width="60" height="18" rx="4" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.08" />
+    <rect x="472" y="23" width="40" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.3" />
+
+    <!-- Divisória central das duas colunas -->
+    <line x1="220" y1="50" x2="220" y2="252" stroke="#FFFFFF" stroke-opacity="0.06" />
+
+    <!-- PAINEL ESQUERDO: Lista de itens minimalistas -->
+    <!-- Item 1: Selecionado -->
+    <rect x="12" y="66" width="196" height="32" rx="6" fill="#FFFFFF" fill-opacity="0.06" />
+    <circle cx="28" cy="82" r="5" fill="#FF5C5C" />
+    <rect x="42" y="79" width="68" height="6" rx="3" fill="#FFFFFF" fill-opacity="0.9" />
+
+    <!-- Item 2 -->
+    <circle cx="28" cy="116" r="4.5" fill="#4ADE80" fill-opacity="0.5" />
+    <rect x="42" y="113" width="80" height="5" rx="2.5" fill="#FFFFFF" fill-opacity="0.35" />
+
+    <!-- Item 3 -->
+    <circle cx="28" cy="146" r="4.5" fill="#60A5FA" fill-opacity="0.5" />
+    <rect x="42" y="143" width="95" height="5" rx="2.5" fill="#FFFFFF" fill-opacity="0.35" />
+
+    <!-- Item 4 -->
+    <rect x="24" y="174" width="8" height="8" rx="2" fill="none" stroke="#FFFFFF" stroke-opacity="0.3" stroke-width="1" />
+    <rect x="42" y="175" width="110" height="5" rx="2.5" fill="#FFFFFF" fill-opacity="0.25" />
+
+    <!-- Item 5 -->
+    <circle cx="28" cy="206" r="4" fill="#FFFFFF" fill-opacity="0.2" />
+    <rect x="42" y="204" width="75" height="5" rx="2.5" fill="#FFFFFF" fill-opacity="0.2" />
+
+    <!-- PAINEL DIREITO: Inspetor / Preview -->
+    <!-- Amostra circular central limpa -->
+    <circle cx="380" cy="114" r="28" fill="#FF5C5C" fill-opacity="0.12" />
+    <circle cx="380" cy="114" r="20" fill="#FF5C5C" />
+    <rect x="355" y="146" width="50" height="5" rx="2.5" fill="#FFFFFF" fill-opacity="0.7" />
+
+    <!-- Linhas estruturais de metadados -->
+    <line x1="240" y1="168" x2="520" y2="168" stroke="#FFFFFF" stroke-opacity="0.05" />
+
+    <!-- Linha de metadado 1 -->
+    <rect x="240" y="184" width="45" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.25" />
+    <rect x="470" y="184" width="50" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.6" />
+
+    <!-- Linha de metadado 2 -->
+    <rect x="240" y="206" width="55" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.25" />
+    <rect x="485" y="206" width="35" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.6" />
+
+    <!-- Linha de metadado 3 -->
+    <rect x="240" y="228" width="35" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.25" />
+    <rect x="455" y="228" width="65" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.6" />
+
+    <!-- BARRA INFERIOR DE STATUS E ATALHOS -->
+    <line x1="0" y1="252" x2="540" y2="252" stroke="#FFFFFF" stroke-opacity="0.06" />
+    <rect y="252" width="540" height="38" rx="0" fill="#08090C" fill-opacity="0.6" />
+
+    <!-- Indicador de Modo / Histórico -->
+    <rect x="18" y="265" width="12" height="12" rx="3" fill="#E5484D" fill-opacity="0.8" />
+    <rect x="38" y="269" width="70" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.5" />
+
+    <!-- Teclas de atalho (Pills de teclado minimalistas) -->
+    <g transform="translate(425, 263)">
+      <rect x="0" y="0" width="16" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.1" />
+      <path d="M 6 8 L 9 8 M 9 6 L 9 10" stroke="#FFFFFF" stroke-opacity="0.6" stroke-width="1" stroke-linecap="round" />
+
+      <rect x="20" y="0" width="16" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.1" />
+      <text x="25" y="11" fill="#FFFFFF" fill-opacity="0.7" font-family="monospace" font-size="8.5" font-weight="600">↵</text>
+
+      <rect x="40" y="0" width="16" height="16" rx="3" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.1" />
+      <text x="44" y="11" fill="#FFFFFF" fill-opacity="0.7" font-family="monospace" font-size="8.5" font-weight="600">K</text>
+    </g>
+  </g>
+</svg>

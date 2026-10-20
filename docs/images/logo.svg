@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- Lux Standalone App Glyph -->
+  <path d="M 10 8 
+           H 22 
+           V 40 
+           L 46 16 
+           H 58 
+           L 34 40 
+           H 58 
+           V 52 
+           H 10 
+           Z" fill="#FFFFFF" />
+</svg>
