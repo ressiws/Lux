@@ -286,6 +286,22 @@ mod win32_backdrop {
             let _ = SetForegroundWindow(hwnd);
         }
     }
+
+    pub const SWP_NOACTIVATE: u32 = 0x0010;
+
+    pub fn set_window_rect(hwnd: *mut c_void, x: i32, y: i32, cx: i32, cy: i32) {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                cx,
+                cy,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
 }
 
 pub fn configure_native_backdrop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
@@ -321,10 +337,20 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         return Ok(());
     }
 
+    let width_physical = (LAUNCHER_WIDTH * scale_factor).round() as u32;
+    let work_area = resolve_target_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
+
     // When the window is hidden, snap immediately without animation
     if !window.is_visible().unwrap_or(false) {
         let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
         let _ = window.set_size(target_logical);
+        if let Some((work_pos, work_size)) = work_area {
+            let target_physical_size = PhysicalSize::new(width_physical, target_physical_height);
+            let target_pos = calculate_launcher_position(target_physical_size, work_pos, work_size);
+            let _ = window.set_position(target_pos);
+        } else {
+            let _ = window.center();
+        }
         return Ok(());
     }
 
@@ -345,8 +371,31 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
             // Cubic ease-out: 1.0 - (1.0 - t)^3
             let factor = 1.0 - (1.0 - t).powi(3);
             let current_physical_h = (start_h + (end_h - start_h) * factor).round() as u32;
-            let current_logical_h = current_physical_h as f64 / scale_factor;
-            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+
+            if let Some((work_pos, work_size)) = work_area {
+                let current_size = PhysicalSize::new(width_physical, current_physical_h);
+                let current_pos = calculate_launcher_position(current_size, work_pos, work_size);
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window_clone.hwnd() {
+                    win32_backdrop::set_window_rect(
+                        hwnd.0,
+                        current_pos.x,
+                        current_pos.y,
+                        width_physical as i32,
+                        current_physical_h as i32,
+                    );
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let current_logical_h = current_physical_h as f64 / scale_factor;
+                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                    let _ = window_clone.set_position(current_pos);
+                }
+            } else {
+                let current_logical_h = current_physical_h as f64 / scale_factor;
+                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                let _ = window_clone.center();
+            }
 
             if i < STEPS {
                 std::thread::sleep(std::time::Duration::from_millis(STEP_DELAY_MS));
@@ -354,7 +403,25 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         }
 
         if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
-            let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+            if let Some((work_pos, work_size)) = work_area {
+                let end_size = PhysicalSize::new(width_physical, target_physical_height);
+                let end_pos = calculate_launcher_position(end_size, work_pos, work_size);
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window_clone.hwnd() {
+                    win32_backdrop::set_window_rect(
+                        hwnd.0,
+                        end_pos.x,
+                        end_pos.y,
+                        width_physical as i32,
+                        target_physical_height as i32,
+                    );
+                }
+                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                let _ = window_clone.set_position(end_pos);
+            } else {
+                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                let _ = window_clone.center();
+            }
         }
     });
 
@@ -379,7 +446,7 @@ pub fn calculate_launcher_position(
     let y_slack = (work_area_size.height as i64 - window_size.height as i64).max(0);
 
     let x = work_area_pos.x + (x_slack / 2) as i32;
-    let y = work_area_pos.y + ((y_slack * 28) / 100) as i32;
+    let y = work_area_pos.y + (y_slack / 2) as i32;
 
     PhysicalPosition::new(x, y)
 }
@@ -396,16 +463,16 @@ fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
     window.primary_monitor().ok().flatten()
 }
 
-pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>) {
+pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
     let scale_factor = window.scale_factor().unwrap_or(1.0);
-    let full_window_size = PhysicalSize::new(
+    let window_physical_size = PhysicalSize::new(
         (LAUNCHER_WIDTH * scale_factor).round() as u32,
-        (LAUNCHER_HEIGHT_EXPANDED * scale_factor).round() as u32,
+        (target_height * scale_factor).round() as u32,
     );
     if let Some(monitor) = resolve_target_monitor(window) {
         let work_area = monitor.work_area();
         let target_pos =
-            calculate_launcher_position(full_window_size, work_area.position, work_area.size);
+            calculate_launcher_position(window_physical_size, work_area.position, work_area.size);
         let _ = window.set_position(target_pos);
     } else {
         let _ = window.center();
@@ -421,8 +488,6 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         state.record_shown();
     }
 
-    position_on_active_monitor(&window);
-
     let mode = app
         .try_state::<LauncherState>()
         .map(|s| s.mode())
@@ -434,6 +499,8 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
     };
     let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
     let _ = window.set_size(target_logical);
+
+    position_on_active_monitor(&window, target_height);
 
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
@@ -628,14 +695,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn centers_horizontally_and_places_in_upper_third_vertically() {
+    fn centers_horizontally_and_vertically() {
         let window_size = PhysicalSize::new(680, 430);
         let work_pos = PhysicalPosition::new(0, 0);
         let work_size = PhysicalSize::new(1920, 1040);
 
         let pos = calculate_launcher_position(window_size, work_pos, work_size);
         assert_eq!(pos.x, (1920 - 680) / 2);
-        assert_eq!(pos.y, ((1040 - 430) * 28) / 100);
+        assert_eq!(pos.y, (1040 - 430) / 2);
     }
 
     #[test]
@@ -646,7 +713,27 @@ mod tests {
 
         let pos = calculate_launcher_position(window_size, work_pos, work_size);
         assert_eq!(pos.x, 1920 + (2560 - 680) / 2);
-        assert_eq!(pos.y, 40 + ((1400 - 430) * 28) / 100);
+        assert_eq!(pos.y, 40 + (1400 - 430) / 2);
+    }
+
+    #[test]
+    fn compact_and_expanded_launchers_share_vertical_center() {
+        let work_pos = PhysicalPosition::new(100, 200);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let compact_size = PhysicalSize::new(680, 144);
+        let expanded_size = PhysicalSize::new(680, 500);
+
+        let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
+        let expanded_pos = calculate_launcher_position(expanded_size, work_pos, work_size);
+
+        let compact_center_y = compact_pos.y + (compact_size.height as i32 / 2);
+        let expanded_center_y = expanded_pos.y + (expanded_size.height as i32 / 2);
+        let expected_screen_center_y = work_pos.y + (work_size.height as i32 / 2);
+
+        assert_eq!(compact_center_y, expected_screen_center_y);
+        assert_eq!(expanded_center_y, expected_screen_center_y);
+        assert_eq!(compact_center_y, expanded_center_y);
     }
 
     #[test]
