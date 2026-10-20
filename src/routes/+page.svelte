@@ -890,11 +890,7 @@
     let unlistenOpenClipboard: (() => void) | undefined;
 
     void onOpenLauncher(() => {
-      if (appMode === "clipboard") {
-        void switchMode("launcher");
-      } else {
-        resetLauncherState(true);
-      }
+      void switchMode("launcher");
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -904,11 +900,7 @@
     });
 
     void onOpenClipboard(() => {
-      if (appMode === "clipboard") {
-        void dismissLauncher();
-      } else {
-        void switchMode("clipboard");
-      }
+      void switchMode("clipboard");
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -947,7 +939,9 @@
     });
 
     void onLauncherShown(() => {
-      resetLauncherState(true);
+      if (appMode === "launcher") {
+        resetLauncherState(true);
+      }
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -958,6 +952,7 @@
 
     void onLauncherHidden(() => {
       resetLauncherState(false);
+      appMode = "launcher";
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -967,7 +962,9 @@
     });
 
     const handleWindowFocus = (): void => {
-      focusSearchInput();
+      if (appMode === "launcher") {
+        focusSearchInput();
+      }
     };
 
     window.addEventListener("focus", handleWindowFocus);

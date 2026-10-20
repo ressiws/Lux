@@ -22,12 +22,20 @@ pub struct LauncherStatus {
     pub native_glass_supported: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowMode {
+    Launcher,
+    Clipboard,
+}
+
 pub struct LauncherState {
     shortcut_status: Mutex<ShortcutStatus>,
     native_glass_supported: bool,
     quitting: AtomicBool,
     has_gained_focus: AtomicBool,
     shown_at: Mutex<Option<Instant>>,
+    current_mode: Mutex<WindowMode>,
 }
 
 impl LauncherState {
@@ -38,6 +46,7 @@ impl LauncherState {
             quitting: AtomicBool::new(false),
             has_gained_focus: AtomicBool::new(false),
             shown_at: Mutex::new(None),
+            current_mode: Mutex::new(WindowMode::Launcher),
         }
     }
 
@@ -51,6 +60,21 @@ impl LauncherState {
             shortcut,
             native_glass_supported: self.native_glass_supported,
         }
+    }
+
+    pub fn mode(&self) -> WindowMode {
+        *self
+            .current_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn set_mode(&self, mode: WindowMode) {
+        let mut guard = self
+            .current_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = mode;
     }
 
     pub fn mark_quitting(&self) {
@@ -83,6 +107,11 @@ impl LauncherState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = None;
+        let mut mode = self
+            .current_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *mode = WindowMode::Launcher;
     }
 
     pub fn should_hide_on_focus_loss(&self) -> bool {
@@ -99,7 +128,14 @@ impl LauncherState {
 
         match elapsed {
             None => false,
-            Some(d) => gained_focus || d >= Duration::from_millis(400),
+            Some(d) => {
+                // Ignore transient focus loss during the initial window show and DOM settling window
+                if d < Duration::from_millis(150) {
+                    false
+                } else {
+                    gained_focus || d >= Duration::from_millis(1000)
+                }
+            }
         }
     }
 }
@@ -357,6 +393,18 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 
     position_on_active_monitor(&window);
 
+    let mode = app
+        .try_state::<LauncherState>()
+        .map(|s| s.mode())
+        .unwrap_or(WindowMode::Launcher);
+
+    let target_height = match mode {
+        WindowMode::Clipboard => CLIPBOARD_HEIGHT,
+        WindowMode::Launcher => LAUNCHER_HEIGHT_IDLE,
+    };
+    let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+    let _ = window.set_size(target_logical);
+
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
     {
@@ -452,11 +500,31 @@ pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Stri
     let is_minimized = window.is_minimized().unwrap_or(false);
 
     if is_visible && !is_minimized {
-        hide_launcher_window(app)
+        let is_launcher = app
+            .try_state::<LauncherState>()
+            .map(|s| s.mode() == WindowMode::Launcher)
+            .unwrap_or(true);
+
+        if is_launcher {
+            hide_launcher_window(app)
+        } else {
+            if let Some(state) = app.try_state::<LauncherState>() {
+                state.set_mode(WindowMode::Launcher);
+                state.record_shown();
+            }
+            let _ = set_launcher_height(app, false);
+            window
+                .emit(EVENT_OPEN_LAUNCHER, ())
+                .map_err(|err| err.to_string())
+        }
     } else {
+        if let Some(state) = app.try_state::<LauncherState>() {
+            state.set_mode(WindowMode::Launcher);
+        }
         show_launcher_window(app)?;
-        let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
-        Ok(())
+        window
+            .emit(EVENT_OPEN_LAUNCHER, ())
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -469,12 +537,32 @@ pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
     let is_minimized = window.is_minimized().unwrap_or(false);
 
     if is_visible && !is_minimized {
-        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+        let is_clipboard = app
+            .try_state::<LauncherState>()
+            .map(|s| s.mode() == WindowMode::Clipboard)
+            .unwrap_or(false);
+
+        if is_clipboard {
+            hide_launcher_window(app)
+        } else {
+            if let Some(state) = app.try_state::<LauncherState>() {
+                state.set_mode(WindowMode::Clipboard);
+                state.record_shown();
+            }
+            let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
+            window
+                .emit(EVENT_OPEN_CLIPBOARD, ())
+                .map_err(|err| err.to_string())
+        }
     } else {
+        if let Some(state) = app.try_state::<LauncherState>() {
+            state.set_mode(WindowMode::Clipboard);
+        }
         show_launcher_window(app)?;
-        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+        window
+            .emit(EVENT_OPEN_CLIPBOARD, ())
+            .map_err(|err| err.to_string())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -532,8 +620,12 @@ mod tests {
         state.record_shown();
         assert!(!state.should_hide_on_focus_loss());
 
-        // Once window gains focus, ANY subsequent focus loss dismisses immediately (0ms delay)
+        // During the initial settling grace period (<150ms), transient blur from DOM unmounting is ignored
         state.record_focused(true);
+        assert!(!state.should_hide_on_focus_loss());
+
+        // After the settling grace period, losing focus dismisses the window
+        std::thread::sleep(Duration::from_millis(160));
         assert!(state.should_hide_on_focus_loss());
 
         // Hiding resets state cleanly; unshown state does not trigger hide
@@ -544,10 +636,34 @@ mod tests {
         state.record_shown();
         assert!(!state.should_hide_on_focus_loss());
         state.record_focused(true);
+        std::thread::sleep(Duration::from_millis(160));
         assert!(state.should_hide_on_focus_loss());
 
         // Quitting prevents dismissal loops
         state.mark_quitting();
         assert!(!state.should_hide_on_focus_loss());
+    }
+
+    #[test]
+    fn window_mode_state_transitions() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt + Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+        );
+
+        // Default mode is Launcher
+        assert_eq!(state.mode(), WindowMode::Launcher);
+
+        // Switching to clipboard mode updates state
+        state.set_mode(WindowMode::Clipboard);
+        assert_eq!(state.mode(), WindowMode::Clipboard);
+
+        // Resetting shown state restores Launcher mode
+        state.reset_shown();
+        assert_eq!(state.mode(), WindowMode::Launcher);
     }
 }
