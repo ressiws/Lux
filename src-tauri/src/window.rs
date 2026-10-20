@@ -436,6 +436,9 @@ pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool)
     }
 }
 
+pub const EVENT_OPEN_LAUNCHER: &str = "lux://open-launcher";
+pub const EVENT_OPEN_CLIPBOARD: &str = "lux://open-clipboard";
+
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
@@ -447,8 +450,27 @@ pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Stri
     if is_visible && !is_minimized {
         hide_launcher_window(app)
     } else {
-        show_launcher_window(app)
+        show_launcher_window(app)?;
+        let _ = window.emit(EVENT_OPEN_LAUNCHER, ());
+        Ok(())
     }
+}
+
+pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main launcher window is not available.".to_string())?;
+
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+
+    if is_visible && !is_minimized {
+        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+    } else {
+        show_launcher_window(app)?;
+        let _ = window.emit(EVENT_OPEN_CLIPBOARD, ());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
