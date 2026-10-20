@@ -66,6 +66,14 @@ impl LauncherState {
         }
     }
 
+    pub fn update_shortcut_status(&self, status: ShortcutStatus) {
+        let mut guard = self
+            .shortcut_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = status;
+    }
+
     pub fn mode(&self) -> WindowMode {
         *self
             .current_mode

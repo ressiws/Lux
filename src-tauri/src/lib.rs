@@ -144,8 +144,8 @@ pub fn run() {
                 .map(window::configure_native_backdrop)
                 .unwrap_or(false);
 
-            let configured_shortcut = shortcuts::resolve_configured_shortcut();
-            let configured_clipboard_shortcut = shortcuts::resolve_configured_clipboard_shortcut();
+            let (configured_shortcut, configured_clipboard_shortcut) =
+                shortcuts::resolve_configured_shortcuts(handle);
             let shortcut_config = shortcuts::register_all_shortcuts(
                 handle,
                 &configured_shortcut,
