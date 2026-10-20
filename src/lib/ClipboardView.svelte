@@ -312,7 +312,13 @@
   async function copyItem(item: ClipboardEntry): Promise<void> {
     try {
       await copyClipboardEntry(item.id);
-      say("Copied to Clipboard");
+      say(
+        item.kind === "color"
+          ? "HEX copied"
+          : item.kind === "image"
+            ? "Image copied"
+            : "Copied to Clipboard",
+      );
       actionsOpen = false;
     } catch (err) {
       say(`Failed to copy: ${err}`);
@@ -449,6 +455,45 @@
       return;
     }
 
+    // Copy item: Ctrl + C / Cmd + C (when not selecting text in search input)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k.toLowerCase() === "c") {
+      const isInputActive = document.activeElement === searchInput;
+      const hasInputSelection =
+        isInputActive &&
+        searchInput &&
+        searchInput.selectionStart !== searchInput.selectionEnd;
+
+      if (!hasInputSelection && selectedItem) {
+        e.preventDefault();
+        void copyItem(selectedItem);
+        return;
+      }
+    }
+
+    // Secondary copy action: Ctrl + Shift + C
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && k.toLowerCase() === "c") {
+      if (selectedItem) {
+        if (selectedItem.kind === "file" && selectedItem.filePath) {
+          e.preventDefault();
+          void navigator.clipboard.writeText(selectedItem.filePath);
+          say("File path copied");
+          return;
+        } else if (selectedItem.kind === "link") {
+          e.preventDefault();
+          const title = selectedItem.linkTitle || selectedItem.name;
+          const url = selectedItem.linkUrl || selectedItem.name;
+          void navigator.clipboard.writeText(`[${title}](${url})`);
+          say("Markdown link copied");
+          return;
+        } else if (selectedItem.kind === "color" && selectedItem.colorRgb) {
+          e.preventDefault();
+          void navigator.clipboard.writeText(selectedItem.colorRgb);
+          say("RGB copied");
+          return;
+        }
+      }
+    }
+
     // Toggle actions popover: Ctrl + K or Tab
     if (k === "Tab" || (e.ctrlKey && k.toLowerCase() === "k")) {
       e.preventDefault();
@@ -505,6 +550,33 @@
     return (r * 299 + g * 587 + b * 114) / 1000;
   }
 
+  function handleCopy(e: ClipboardEvent): void {
+    const isInputActive = document.activeElement === searchInput;
+    const hasInputSelection =
+      isInputActive &&
+      searchInput &&
+      searchInput.selectionStart !== searchInput.selectionEnd;
+
+    if (hasInputSelection) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      const anchor = selection.anchorNode;
+      const focus = selection.focusNode;
+      const pv = document.getElementById("pv");
+      if (pv && ((anchor && pv.contains(anchor)) || (focus && pv.contains(focus)))) {
+        return;
+      }
+    }
+
+    if (selectedItem) {
+      e.preventDefault();
+      void copyItem(selectedItem);
+    }
+  }
+
   onMount(() => {
     void setWindowHeight(CLIPBOARD_WINDOW_HEIGHT);
     void loadHistory();
@@ -518,11 +590,13 @@
     });
 
     window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("copy", handleCopy);
 
     return () => {
       clearTimeout(feedbackTimer);
       unlisten?.();
       window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("copy", handleCopy);
     };
   });
 </script>
@@ -1156,6 +1230,8 @@
     overflow-y: auto;
     padding: 4px 10px 10px;
     scrollbar-width: thin;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .sec {
@@ -1163,6 +1239,8 @@
     font-weight: 500;
     color: var(--dim);
     padding: 12px 10px 6px;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .row {
@@ -1173,6 +1251,8 @@
     padding: 0 10px;
     border-radius: 10px;
     cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .row.on {
@@ -1186,6 +1266,9 @@
     width: 30px;
     height: 30px;
     border-radius: 50%;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
   }
 
   .ico {
@@ -1221,11 +1304,17 @@
     white-space: nowrap;
     font-size: 12.5px;
     flex: none;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
   }
 
   .pin-badge {
     font-size: 12px;
     flex: none;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
   }
 
   .r {
@@ -1234,6 +1323,9 @@
     font-size: 12px;
     flex: none;
     padding-left: 8px;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
   }
 
   .pv {
@@ -1418,6 +1510,8 @@
     overflow-y: auto;
     scrollbar-width: thin;
     flex: 1;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .pm {
