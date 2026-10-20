@@ -8,10 +8,12 @@
     splitHighlight,
   } from "$lib/mock-data";
   import {
+    getFeaturesConfig,
     getIndexStats,
     getLauncherStatus,
     hideLauncher,
     notifyFrontendReady,
+    onFeaturesChanged,
     onIndexingStatus,
     onLauncherHidden,
     onLauncherShown,
@@ -35,6 +37,7 @@
   } from "$lib/settings";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import type {
+    FeaturesConfig,
     IndexStats,
     IndexingStatusPayload,
     ItemAction,
@@ -67,6 +70,7 @@
     isIndexed: false,
   });
   let appMode = $state<"launcher" | "clipboard">("launcher");
+  let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
 
   let settings = $state<SettingsState>(loadSettings());
 
@@ -119,6 +123,10 @@
   }
 
   async function switchMode(mode: "launcher" | "clipboard"): Promise<void> {
+    if (mode === "clipboard" && !featuresConfig.clipboardHistory) {
+      say("Clipboard History is disabled in Settings");
+      return;
+    }
     appMode = mode;
     if (mode === "clipboard") {
       actionsOpen = false;
@@ -307,6 +315,10 @@
       return;
     }
     if (item.category === "clip" || item.name.toLowerCase().includes("clipboard")) {
+      if (!featuresConfig.clipboardHistory) {
+        say("Clipboard History is disabled in Settings");
+        return;
+      }
       void switchMode("clipboard");
       return;
     }
@@ -772,6 +784,29 @@
     let unlistenOpenLauncher: (() => void) | undefined;
     let unlistenOpenClipboard: (() => void) | undefined;
     let unlistenSettings: (() => void) | undefined;
+    let unlistenFeatures: (() => void) | undefined;
+
+    void getFeaturesConfig()
+      .then((config) => {
+        if (!disposed) {
+          featuresConfig = config;
+        }
+      })
+      .catch(() => {});
+
+    void onFeaturesChanged((newFeatures) => {
+      featuresConfig = newFeatures;
+      if (!newFeatures.clipboardHistory && appMode === "clipboard") {
+        void switchMode("launcher");
+        say("Clipboard History is disabled in Settings");
+      }
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenFeatures = unlisten;
+      }
+    });
 
     void onSettingsChanged((newSettings) => {
       settings = newSettings;
@@ -796,6 +831,10 @@
     });
 
     void onOpenClipboard(() => {
+      if (!featuresConfig.clipboardHistory) {
+        say("Clipboard History is disabled in Settings");
+        return;
+      }
       void switchMode("clipboard");
     }).then((unlisten) => {
       if (disposed) {
@@ -877,6 +916,7 @@
       unlistenOpenLauncher?.();
       unlistenOpenClipboard?.();
       unlistenSettings?.();
+      unlistenFeatures?.();
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("keydown", handleKeydown);
     };

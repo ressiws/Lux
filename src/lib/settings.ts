@@ -10,6 +10,7 @@ export interface SettingsState {
   progressBar: boolean;
   caret: boolean;
   fileSearch: boolean;
+  clipboardHistory: boolean;
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   progressBar: true,
   caret: true,
   fileSearch: true,
+  clipboardHistory: true,
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";

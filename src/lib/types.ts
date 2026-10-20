@@ -125,3 +125,7 @@ export interface ShortcutConfigStatus {
   readonly clipboard: ShortcutStatus;
 }
 
+export interface FeaturesConfig {
+  readonly clipboardHistory: boolean;
+}
+

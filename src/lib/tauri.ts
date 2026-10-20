@@ -146,3 +146,25 @@ export async function updateShortcuts(
 export async function notifyFrontendReady(): Promise<void> {
   return invoke<void>("notify_frontend_ready");
 }
+
+export async function getFeaturesConfig(): Promise<import("./types").FeaturesConfig> {
+  return invoke<import("./types").FeaturesConfig>("get_features_config");
+}
+
+export async function setFeatureEnabled(
+  feature: string,
+  enabled: boolean,
+): Promise<import("./types").FeaturesConfig> {
+  return invoke<import("./types").FeaturesConfig>("set_feature_enabled", {
+    feature,
+    enabled,
+  });
+}
+
+export async function onFeaturesChanged(
+  handler: (features: import("./types").FeaturesConfig) => void,
+): Promise<UnlistenFn> {
+  return listen<import("./types").FeaturesConfig>("lux://features-changed", (event) => {
+    handler(event.payload);
+  });
+}

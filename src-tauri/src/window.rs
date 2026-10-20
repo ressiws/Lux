@@ -860,6 +860,14 @@ pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Stri
 }
 
 pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let clipboard_enabled = app
+        .try_state::<crate::features::FeaturesState>()
+        .map(|f| f.is_clipboard_history_enabled())
+        .unwrap_or(true);
+    if !clipboard_enabled {
+        return Err("Clipboard History is disabled in Settings.".to_string());
+    }
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;

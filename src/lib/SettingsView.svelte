@@ -3,12 +3,15 @@
   import {
     clearClipboardHistory,
     getClipboardHistory,
+    getFeaturesConfig,
     getIndexStats,
     getShortcutsStatus,
     hideSettings,
+    onFeaturesChanged,
     onIndexingStatus,
     onOpenSettings,
     reindex,
+    setFeatureEnabled,
     updateShortcuts,
   } from "./tauri";
   import {
@@ -18,10 +21,11 @@
     type SettingsCategory,
     type SettingsState,
   } from "./settings";
-  import type { IndexStats, ShortcutConfigStatus } from "./types";
+  import type { FeaturesConfig, IndexStats, ShortcutConfigStatus } from "./types";
 
   let activeCategory = $state<SettingsCategory>("general");
   let settings = $state<SettingsState>(loadSettings());
+  let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
 
   let isIndexing = $state(false);
   let indexStats = $state<IndexStats>({
@@ -36,6 +40,29 @@
   let shortcutMessage = $state("");
   let shortcutIsError = $state(false);
   let clipboardCount = $state(0);
+
+  async function loadFeatures(): Promise<void> {
+    try {
+      featuresConfig = await getFeaturesConfig();
+      if (settings.clipboardHistory !== featuresConfig.clipboardHistory) {
+        settings.clipboardHistory = featuresConfig.clipboardHistory;
+        saveSettings(settings);
+      }
+    } catch {
+      // Ignore outside Tauri
+    }
+  }
+
+  async function handleToggleClipboardHistory(enabled: boolean): Promise<void> {
+    try {
+      featuresConfig = await setFeatureEnabled("clipboardHistory", enabled);
+      setSetting("clipboardHistory", enabled);
+      await loadShortcutsStatus();
+    } catch (err) {
+      shortcutMessage = String(err);
+      shortcutIsError = true;
+    }
+  }
 
   function setSetting<K extends keyof SettingsState>(
     key: K,
@@ -126,6 +153,7 @@
 
   onMount(() => {
     applyThemeAndCaret(settings);
+    void loadFeatures();
     void loadShortcutsStatus();
 
     void getIndexStats()
@@ -136,10 +164,12 @@
 
     let unlistenIndexing: (() => void) | undefined;
     let unlistenOpen: (() => void) | undefined;
+    let unlistenFeatures: (() => void) | undefined;
 
     void onOpenSettings(() => {
       settings = loadSettings();
       applyThemeAndCaret(settings);
+      void loadFeatures();
       void loadShortcutsStatus();
       void getIndexStats()
         .then((stats) => {
@@ -148,6 +178,15 @@
         .catch(() => {});
     }).then((unlisten) => {
       unlistenOpen = unlisten;
+    });
+
+    void onFeaturesChanged((newFeatures) => {
+      featuresConfig = newFeatures;
+      settings.clipboardHistory = newFeatures.clipboardHistory;
+      saveSettings(settings);
+      void loadShortcutsStatus();
+    }).then((unlisten) => {
+      unlistenFeatures = unlisten;
     });
 
     void onIndexingStatus((payload) => {
@@ -172,6 +211,9 @@
       }
       if (unlistenOpen) {
         unlistenOpen();
+      }
+      if (unlistenFeatures) {
+        unlistenFeatures();
       }
     };
   });
@@ -369,6 +411,21 @@
     {:else if activeCategory === "features"}
       <div class="srow">
         <div>
+          <b>Clipboard History</b>
+          <small>Monitor, store and search recent clipboard entries</small>
+        </div>
+        <button
+          class="sw"
+          type="button"
+          role="switch"
+          aria-checked={featuresConfig.clipboardHistory}
+          aria-label="Clipboard History"
+          onclick={() =>
+            void handleToggleClipboardHistory(!featuresConfig.clipboardHistory)}
+        ></button>
+      </div>
+      <div class="srow">
+        <div>
           <b>Preview Panel</b>
           <small>Show details and metadata for selected item</small>
         </div>
@@ -414,11 +471,18 @@
       <div class="srow">
         <div>
           <b>Clipboard History Shortcut</b>
-          <small>Global hotkey to open clipboard history directly</small>
+          <small>
+            {#if !featuresConfig.clipboardHistory}
+              <span style="color: var(--mut);">Inactive (Clipboard History is disabled)</span>
+            {:else}
+              Global hotkey to open clipboard history directly
+            {/if}
+          </small>
         </div>
         <input
           class="shortcut-input"
           bind:value={clipboardShortcutInput}
+          disabled={!featuresConfig.clipboardHistory}
           onblur={applyShortcuts}
           onkeydown={(e) => {
             if (e.key === "Enter") applyShortcuts();
@@ -426,6 +490,12 @@
           placeholder="e.g. Alt+Shift+V"
         />
       </div>
+
+      {#if !featuresConfig.clipboardHistory}
+        <div class="shortcut-status-banner">
+          ℹ️ Clipboard History is disabled in Features. Its global keyboard shortcut is inactive.
+        </div>
+      {/if}
 
       {#if (launcherShortcutInput.toLowerCase().includes("win") && launcherShortcutInput.toLowerCase().includes("v")) || (clipboardShortcutInput.toLowerCase().includes("win") && clipboardShortcutInput.toLowerCase().includes("v"))}
         <div class="shortcut-win-v-notice">

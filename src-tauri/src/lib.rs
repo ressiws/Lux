@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod features;
 pub mod search;
 pub mod shortcuts;
 pub mod tray;
@@ -11,6 +12,7 @@ use clipboard::{
     clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
     toggle_pin_clipboard_entry,
 };
+use features::{get_features_config, set_feature_enabled};
 use shortcuts::{get_shortcuts_status, update_shortcuts};
 
 #[tauri::command]
@@ -145,10 +147,16 @@ pub fn run() {
             toggle_pin_clipboard_entry,
             notify_frontend_ready,
             open_settings,
-            hide_settings
+            hide_settings,
+            get_features_config,
+            set_feature_enabled
         ])
         .setup(|app| {
             let handle = app.handle();
+
+            let features_config = features::load_or_default_features_config(handle);
+            let features_state = features::FeaturesState::new(&features_config);
+            app.manage(features_state);
 
             let native_glass_supported = app
                 .get_webview_window(window::MAIN_WINDOW_LABEL)
@@ -187,9 +195,10 @@ pub fn run() {
             ));
 
             let clipboard_state = clipboard::ClipboardState::new(clipboard::DEFAULT_MAX_CLIPBOARD_ENTRIES);
-            let clipboard_history_arc = clipboard_state.history.clone();
+            if features_config.clipboard_history {
+                clipboard_state.start_monitor(handle.clone());
+            }
             app.manage(clipboard_state);
-            clipboard::start_clipboard_monitor(handle.clone(), clipboard_history_arc);
 
             let search_state = search::SearchState::new();
             app.manage(search_state);

@@ -244,33 +244,46 @@ pub fn register_all_shortcuts<R: Runtime>(
         },
     };
 
-    // Register clipboard shortcut
-    let clipboard_status = match parse_launcher_shortcut(clipboard_raw) {
-        Ok(parsed) => {
-            match global_shortcut.on_shortcut(parsed, move |app_handle, _shortcut, event| {
-                if event.state == ShortcutState::Pressed
-                    && let Err(err) = crate::window::toggle_clipboard_window(app_handle)
-                {
-                    eprintln!("Warning: failed to toggle clipboard window: {err}");
-                }
-            }) {
-                Ok(()) => ShortcutStatus {
-                    shortcut: clipboard_display,
-                    registered: true,
-                    error: None,
-                },
-                Err(err) => ShortcutStatus {
-                    shortcut: clipboard_display,
-                    registered: false,
-                    error: Some(format!("Failed to register clipboard shortcut: {err}")),
-                },
-            }
-        }
-        Err(err) => ShortcutStatus {
+    // Register clipboard shortcut only if clipboard history feature is enabled
+    let clipboard_enabled = app
+        .try_state::<crate::features::FeaturesState>()
+        .map(|f| f.is_clipboard_history_enabled())
+        .unwrap_or(true);
+
+    let clipboard_status = if !clipboard_enabled {
+        ShortcutStatus {
             shortcut: clipboard_display,
             registered: false,
-            error: Some(err),
-        },
+            error: Some("Clipboard History is disabled in Settings.".to_string()),
+        }
+    } else {
+        match parse_launcher_shortcut(clipboard_raw) {
+            Ok(parsed) => {
+                match global_shortcut.on_shortcut(parsed, move |app_handle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed
+                        && let Err(err) = crate::window::toggle_clipboard_window(app_handle)
+                    {
+                        eprintln!("Warning: failed to toggle clipboard window: {err}");
+                    }
+                }) {
+                    Ok(()) => ShortcutStatus {
+                        shortcut: clipboard_display,
+                        registered: true,
+                        error: None,
+                    },
+                    Err(err) => ShortcutStatus {
+                        shortcut: clipboard_display,
+                        registered: false,
+                        error: Some(format!("Failed to register clipboard shortcut: {err}")),
+                    },
+                }
+            }
+            Err(err) => ShortcutStatus {
+                shortcut: clipboard_display,
+                registered: false,
+                error: Some(err),
+            },
+        }
     };
 
     ShortcutConfigStatus {
