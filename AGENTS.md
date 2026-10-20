@@ -426,20 +426,47 @@ Do not silently rewrite the project's goals or established decisions.
 
 Never modify `main` directly.
 
-- Work on a dedicated branch when making changes.
-- Preserve unrelated user modifications.
-- Inspect Git status before editing and before reporting completion.
-- Do not discard, overwrite, reset, or revert unrelated changes.
-- Do not use destructive Git operations without explicit approval.
-- Do not commit without explicit approval.
-- Do not push, merge, or rebase without explicit approval.
-- When commits are authorized, follow Conventional Commits.
-- Keep changes logically grouped and reviewable.
-- Prefer focused changes over large, unrelated batches.
+### 17.1 Branches by Development Phase
 
-Before finishing, inspect the diff for unintended changes, accidental file modifications, generated artifacts, secrets, and scope creep.
+- Use a dedicated branch for each significant development phase.
+- Follow descriptive naming conventions such as `phase/02-search` or `phase/03-settings`.
+- Create the next phase branch from the appropriate stable branch or completed previous phase.
+- Do not create a new branch for every small task.
+- Check whether a branch already exists before creating it.
+- Never switch branches when doing so could lose or mix uncommitted work.
 
-Never assume that existing uncommitted changes belong to the current task.
+### 17.2 Frequent, Focused Commits
+
+**Once a requested task is implemented, verified, and working, commit it before starting the next task.**
+
+- Treat each independently completed task as a separate commit.
+- If task A is completed and committed, task B should build on that commit rather than accumulating both tasks into one commit.
+- Do not wait until an entire development phase is finished to commit completed work.
+- Use Conventional Commits with concise, descriptive messages, such as `feat: add application search` or `fix: prevent launcher from closing unexpectedly`.
+- Do not commit incomplete, unverified, unrelated, or experimental changes as completed work.
+- Inspect the diff and Git status before every commit.
+- Preserve unrelated user modifications and never include them accidentally.
+
+### 17.3 Commit Authorization
+
+The user explicitly authorizes automatic commits as part of the normal development workflow.
+
+- You may create commits without asking for approval after each task, provided the task passes its relevant verification and the changes are limited to the authorized scope.
+- A request to implement a feature authorizes the necessary focused implementation and its normal verification.
+- Do not interpret this authorization as permission to push, merge, rebase, reset, or perform destructive Git operations.
+- Never push to a remote unless explicitly requested.
+- If unexpected changes, conflicts, secrets, or potential data loss are discovered, stop and ask before proceeding.
+
+### 17.4 Before Finishing a Task
+
+- Confirm the current branch.
+- Review the diff for unintended changes.
+- Run the relevant verification.
+- Commit the completed task if verification passes.
+- Report the commit hash, commit message, current branch, and verification results.
+- If verification fails, do not claim success or commit the changes as a completed feature. Report the failure and preserve the work.
+
+**Core principle: one completed task, one focused commit; one significant development phase, one dedicated branch.**
 
 ## 18. Code Quality and Formatting
 
@@ -477,6 +504,7 @@ Use a concise, practical final report containing:
 - **Verification:** Checks run and their results.
 - **Limitations:** Untested platforms, failed checks, or unfinished work.
 - **Approval needed:** Decisions or follow-up changes requiring the user's authorization.
+- **Git:** Report the current branch and, when a completed task was committed, its commit hash and message. Do not leave completed, verified tasks uncommitted merely to batch them with future work.
 
 Do not claim that tests passed if they were not run. Do not claim that a feature works on both platforms without appropriate evidence.
 

@@ -39,8 +39,11 @@ export function mapBackendApp(app: SearchResultItem): LauncherItem {
     name: app.name,
     subtitle: app.subtitle,
     path: app.path,
+    location: app.location,
     color: app.color ?? "#4a8fd8",
     icon: app.icon ?? undefined,
+    size: app.size ?? undefined,
+    version: app.version ?? undefined,
     keywords: "",
     rightLabel: "Application",
     primaryLabel: "Open Application",
@@ -55,15 +58,19 @@ export function mapBackendApp(app: SearchResultItem): LauncherItem {
 
 export function mapBackendFile(file: SearchResultItem): LauncherItem {
   const isImage = file.isImage;
-  const thumbnail = getFileThumbnail(file.path, isImage);
+  const thumbnail = file.thumbnail || getFileThumbnail(file.path, isImage);
   const label = isImage ? "Image" : file.rightLabel;
   return {
     category: "file",
     name: file.name,
     subtitle: file.subtitle,
     path: file.path,
+    location: file.location,
+    icon: file.icon ?? undefined,
     isImage,
     thumbnail,
+    size: file.size ?? undefined,
+    version: file.version ?? undefined,
     keywords: "",
     rightLabel: label,
     primaryLabel: isImage ? "Open Image" : `Open ${label}`,
@@ -346,6 +353,7 @@ export const SECTION_TITLES: Readonly<Record<ItemCategory, string>> = {
 
 export const CATEGORY_ICONS: Readonly<Record<string, string>> = {
   file: "M7 3h7l4 4v14H7z M14 3v4h4",
+  folder: "M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z",
   image:
     "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M21 15l-5-5L5 21",
   cmd: "M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z",
@@ -378,6 +386,7 @@ export function scoreItem(item: LauncherItem, loweredQuery: string): number {
 export function buildSections(
   rawQuery: string,
   searchResponse?: SearchResponse,
+  options?: { enableFileSearch?: boolean },
 ): LauncherSection[] {
   const trimmed = rawQuery.trim();
   const lowered = trimmed.toLowerCase();
@@ -385,7 +394,7 @@ export function buildSections(
   if (!trimmed) {
     const suggestedApps =
       searchResponse && searchResponse.apps.length > 0
-        ? searchResponse.apps.slice(0, 3).map(mapBackendApp)
+        ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
         : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
 
     return [
@@ -394,15 +403,11 @@ export function buildSections(
         title: "Suggestions",
         items: suggestedApps,
       },
-      {
-        category: "cmd",
-        title: "Commands",
-        items: MOCK_COMMANDS.slice(0, 3),
-      },
     ];
   }
 
   const sections: LauncherSection[] = [];
+
   const calcPreview = evaluateMathExpression(trimmed);
   if (calcPreview) {
     sections.push({
@@ -427,6 +432,8 @@ export function buildSections(
     });
   }
 
+  const enableFileSearch = options?.enableFileSearch ?? true;
+
   if (searchResponse) {
     if (searchResponse.apps.length > 0) {
       sections.push({
@@ -436,7 +443,7 @@ export function buildSections(
       });
     }
 
-    if (searchResponse.files.length > 0) {
+    if (enableFileSearch && searchResponse.files.length > 0) {
       sections.push({
         category: "file",
         title: SECTION_TITLES.file,
@@ -450,6 +457,9 @@ export function buildSections(
     >();
 
     for (const item of MOCK_ITEMS) {
+      if (!enableFileSearch && item.category === "file") {
+        continue;
+      }
       const score = scoreItem(item, lowered);
       if (score > 0) {
         const list = grouped.get(item.category) ?? [];
@@ -475,17 +485,6 @@ export function buildSections(
           .map((entry) => entry.item),
       });
     }
-  }
-
-  const matchedCommands = MOCK_COMMANDS.filter(
-    (cmd) => scoreItem(cmd, lowered) > 0,
-  );
-  if (matchedCommands.length > 0 && !sections.some((s) => s.category === "cmd")) {
-    sections.push({
-      category: "cmd",
-      title: SECTION_TITLES.cmd,
-      items: matchedCommands.slice(0, 3),
-    });
   }
 
   if (sections.length === 0) {

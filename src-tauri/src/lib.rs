@@ -43,6 +43,40 @@ fn reveal_item_in_folder(path: String) -> Result<(), String> {
     search::reveal_in_folder(&path)
 }
 
+#[tauri::command]
+fn set_launcher_height(expanded: bool, app: AppHandle) -> Result<(), String> {
+    window::set_launcher_height(&app, expanded)
+}
+
+#[tauri::command]
+fn set_native_glass(enable: bool, app: AppHandle) -> Result<(), String> {
+    window::set_native_glass(&app, enable)
+}
+
+#[tauri::command]
+fn reindex(app: AppHandle) -> Result<(), String> {
+    search::start_background_indexing(app);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexStats {
+    total_apps: usize,
+    total_files: usize,
+    is_indexed: bool,
+}
+
+#[tauri::command]
+fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
+    let guard = state.index.read().unwrap_or_else(|p| p.into_inner());
+    IndexStats {
+        total_apps: guard.apps.len(),
+        total_files: guard.files.len(),
+        is_indexed: guard.is_indexed,
+    }
+}
+
 fn should_show_on_startup() -> bool {
     if std::env::args().any(|arg| arg == "--show") {
         return true;
@@ -64,7 +98,11 @@ pub fn run() {
             search_launcher,
             open_target,
             open_target_as_admin,
-            reveal_item_in_folder
+            reveal_item_in_folder,
+            set_launcher_height,
+            set_native_glass,
+            reindex,
+            get_index_stats
         ])
         .setup(|app| {
             let handle = app.handle();
