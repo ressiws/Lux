@@ -407,6 +407,38 @@ export function runCalculatorTests(): number {
     assertEqual(item?.rightLabel, "Color", "Color item right label");
   });
 
+  // 17. Documented feature guide query verification
+  const documentedQueries = [
+    "1 + 1",
+    "25 EUR to USD",
+    "10 PM here to London",
+    "100 km to miles",
+    "VAT 23% on 100",
+    "#798F78 to RGB",
+    "generate password 24",
+    "(128 * 1.19) / 3",
+    "sqrt(144) + 2^8",
+    "15% of 240",
+    "remove 23% VAT from 123",
+    "split 87.50 between 4",
+    "time in Tokyo",
+    "time difference Lisbon London",
+    "90 days from today",
+    "days until Christmas",
+    "days between 12 Oct and 21 Oct",
+    "100 C to F",
+    "1 GiB to MB",
+  ];
+
+  for (const q of documentedQueries) {
+    check(() => {
+      const res = evaluateMathExpression(q);
+      if (!res) {
+        throw new Error(`Documented query example failed to produce a quick answer: "${q}"`);
+      }
+    });
+  }
+
   check(() => {
     assertEqual(formatCalculatorNumber(-0), "0", "Formats -0 as 0");
   });
