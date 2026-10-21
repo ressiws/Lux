@@ -2176,73 +2176,82 @@
     max-height: 560px;
   }
 
-  /* Minimal Style: Compact single-line results, no footer noise, maximum information density */
-  :global(:root[data-style="minimal"]) .bar {
+  /* Information Density: Minimal hides footer keyboard navigation hints and simplifies subtitles */
+  :global(:root[data-info-density="minimal"]) .hr {
+    display: none !important;
+  }
+
+  :global(:root[data-info-density="minimal"]) .s {
+    opacity: 0.6;
+  }
+
+  /* Information Density: Detailed emphasizes metadata and hints */
+  :global(:root[data-info-density="detailed"]) .s {
+    opacity: 0.9;
+  }
+
+  :global(:root[data-info-density="detailed"]) .hr {
+    padding: 12px 18px;
+  }
+
+  /* Layout Density: Compact reduces dimensions, row heights and padding */
+  :global(:root[data-layout-density="compact"]) .bar {
     height: 54px;
     padding: 0 14px;
     gap: 8px;
   }
 
-  :global(:root[data-style="minimal"]) #q {
+  :global(:root[data-layout-density="compact"]) #q {
     font-size: 18px;
   }
 
-  :global(:root[data-style="minimal"]) .row {
+  :global(:root[data-layout-density="compact"]) .row {
     height: 36px;
     padding: 0 8px;
     gap: 8px;
   }
 
-  :global(:root[data-style="minimal"]) .ico,
-  :global(:root[data-style="minimal"]) .ico-img,
-  :global(:root[data-style="minimal"]) .thumb {
+  :global(:root[data-layout-density="compact"]) .ico,
+  :global(:root[data-layout-density="compact"]) .ico-img,
+  :global(:root[data-layout-density="compact"]) .thumb {
     width: 22px;
     height: 22px;
     border-radius: 5px;
   }
 
-  :global(:root[data-style="minimal"]) .t {
+  :global(:root[data-layout-density="compact"]) .t {
     font-size: 13px;
   }
 
-  :global(:root[data-style="minimal"]) .s {
+  :global(:root[data-layout-density="compact"]) .s {
     font-size: 11.5px;
   }
 
-  :global(:root[data-style="minimal"]) .hr {
-    display: none !important;
-  }
-
-  /* Detailed Style: Richer metadata, larger touch/click targets, full status information */
-  :global(:root[data-style="detailed"]) .bar {
+  /* Layout Density: Comfortable provides spacious rows and larger touch/click targets */
+  :global(:root[data-layout-density="comfortable"]) .bar {
     height: 72px;
     padding: 0 20px;
   }
 
-  :global(:root[data-style="detailed"]) .row {
+  :global(:root[data-layout-density="comfortable"]) .row {
     height: 56px;
     padding: 0 14px;
     gap: 14px;
   }
 
-  :global(:root[data-style="detailed"]) .ico,
-  :global(:root[data-style="detailed"]) .ico-img,
-  :global(:root[data-style="detailed"]) .thumb {
+  :global(:root[data-layout-density="comfortable"]) .ico,
+  :global(:root[data-layout-density="comfortable"]) .ico-img,
+  :global(:root[data-layout-density="comfortable"]) .thumb {
     width: 36px;
     height: 36px;
     border-radius: 9px;
   }
 
-  :global(:root[data-style="detailed"]) .t {
+  :global(:root[data-layout-density="comfortable"]) .t {
     font-size: 15px;
   }
 
-  :global(:root[data-style="detailed"]) .s {
+  :global(:root[data-layout-density="comfortable"]) .s {
     font-size: 13px;
-    opacity: 0.85;
-  }
-
-  :global(:root[data-style="detailed"]) .hr {
-    padding: 12px 18px;
   }
 </style>

@@ -422,6 +422,15 @@
     <button
       type="button"
       role="tab"
+      class:active={activeCategory === "clipboard"}
+      aria-selected={activeCategory === "clipboard"}
+      onclick={() => (activeCategory = "clipboard")}
+    >
+      Clipboard
+    </button>
+    <button
+      type="button"
+      role="tab"
       class:active={activeCategory === "features"}
       aria-selected={activeCategory === "features"}
       onclick={() => (activeCategory = "features")}
@@ -431,11 +440,11 @@
     <button
       type="button"
       role="tab"
-      class:active={activeCategory === "shortcuts"}
-      aria-selected={activeCategory === "shortcuts"}
-      onclick={() => (activeCategory = "shortcuts")}
+      class:active={activeCategory === "about"}
+      aria-selected={activeCategory === "about"}
+      onclick={() => (activeCategory = "about")}
     >
-      Shortcuts
+      About
     </button>
   </div>
 
@@ -444,7 +453,7 @@
       <div class="srow">
         <div>
           <b>Launch on Startup</b>
-          <small>Start Lux automatically when logging in</small>
+          <small class="desc">Start Lux automatically when logging into Windows</small>
         </div>
         <button
           class="sw"
@@ -455,36 +464,122 @@
           onclick={() => setSetting("login", !settings.login)}
         ></button>
       </div>
+
       <div class="srow">
         <div>
-          <b>System Index</b>
-          <small>
-            {#if isIndexing}
-              Indexing applications and files…
-            {:else if indexStats.isIndexed}
-              {indexStats.totalApps} apps, {indexStats.totalFiles} files
+          <b>Launcher Global Shortcut</b>
+          <small class="desc">Show or hide the command launcher</small>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input
+            class="shortcut-input"
+            bind:value={launcherShortcutInput}
+            onblur={applyShortcuts}
+            onkeydown={(e) => {
+              if (e.key === "Enter") applyShortcuts();
+            }}
+            placeholder="e.g. Alt+Space"
+          />
+          <button
+            class="btn-sub"
+            type="button"
+            onclick={applyShortcuts}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+
+      {#if shortcutMessage && activeCategory === "general"}
+        <div class="shortcut-status-banner" class:error={shortcutIsError}>
+          {shortcutMessage}
+        </div>
+      {/if}
+
+      <div class="srow">
+        <div>
+          <b>Default Behavior</b>
+          <small class="desc">Fast centered launcher window, auto-dismiss when focus is lost</small>
+        </div>
+        <span class="badge">Standard</span>
+      </div>
+    {:else if activeCategory === "appearance"}
+      <div class="srow">
+        <div>
+          <b>Information Density</b>
+          <small class="desc">
+            {#if settings.informationDensity === "minimal"}
+              Minimal: Essential information only, hiding hints and secondary metadata
+            {:else if settings.informationDensity === "detailed"}
+              Detailed: Richer descriptions, full paths, and navigation hints
             {:else}
-              Index ready
+              Normal: Balanced display with standard metadata and hints
             {/if}
           </small>
         </div>
-        <button
-          class="btn-sub"
-          type="button"
-          disabled={isIndexing}
-          onclick={triggerReindex}
-        >
-          {isIndexing ? "Indexing…" : "Re-index now"}
-        </button>
+        <div class="seg" role="group" aria-label="Information Density">
+          <button
+            type="button"
+            aria-pressed={settings.informationDensity === "minimal"}
+            onclick={() => setSetting("informationDensity", "minimal")}
+          >
+            Minimal
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.informationDensity === "normal"}
+            onclick={() => setSetting("informationDensity", "normal")}
+          >
+            Normal
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.informationDensity === "detailed"}
+            onclick={() => setSetting("informationDensity", "detailed")}
+          >
+            Detailed
+          </button>
+        </div>
       </div>
+
       <div class="srow">
         <div>
-          <b>Global Shortcut</b>
-          <small>Show or hide Lux</small>
+          <b>Layout Density</b>
+          <small class="desc">
+            {#if settings.layoutDensity === "compact"}
+              Compact: Tighter row heights, compact control targets, reduced padding
+            {:else if settings.layoutDensity === "comfortable"}
+              Comfortable: Spacious rows, generous padding, larger touch/click targets
+            {:else}
+              Normal: Balanced standard spacing and dimensions
+            {/if}
+          </small>
         </div>
-        <span class="k"><kbd>Alt</kbd><kbd>Space</kbd></span>
+        <div class="seg" role="group" aria-label="Layout Density">
+          <button
+            type="button"
+            aria-pressed={settings.layoutDensity === "compact"}
+            onclick={() => setSetting("layoutDensity", "compact")}
+          >
+            Compact
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.layoutDensity === "normal"}
+            onclick={() => setSetting("layoutDensity", "normal")}
+          >
+            Normal
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.layoutDensity === "comfortable"}
+            onclick={() => setSetting("layoutDensity", "comfortable")}
+          >
+            Comfortable
+          </button>
+        </div>
       </div>
-    {:else if activeCategory === "appearance"}
+
       <div class="srow">
         <div><b>Theme</b></div>
         <div class="seg" role="group" aria-label="Theme">
@@ -511,10 +606,11 @@
           </button>
         </div>
       </div>
+
       <div class="srow">
         <div>
           <b>Results Layout</b>
-          <small>Display results as a list or grid</small>
+          <small class="desc">Display search results as a list or grid</small>
         </div>
         <div class="seg" role="group" aria-label="Results Layout">
           <button
@@ -533,47 +629,11 @@
           </button>
         </div>
       </div>
-      <div class="srow">
-        <div>
-          <b>Interface Style</b>
-          <small>
-            {#if settings.interfaceStyle === "minimal"}
-              Compact single-line items, no footer noise, maximum density
-            {:else if settings.interfaceStyle === "detailed"}
-              Richer metadata, larger touch targets, full status information
-            {:else}
-              Balanced layout with standard spacing and previews
-            {/if}
-          </small>
-        </div>
-        <div class="seg" role="group" aria-label="Interface Style">
-          <button
-            type="button"
-            aria-pressed={settings.interfaceStyle === "minimal"}
-            onclick={() => setSetting("interfaceStyle", "minimal")}
-          >
-            Minimal
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.interfaceStyle === "normal"}
-            onclick={() => setSetting("interfaceStyle", "normal")}
-          >
-            Normal
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.interfaceStyle === "detailed"}
-            onclick={() => setSetting("interfaceStyle", "detailed")}
-          >
-            Detailed
-          </button>
-        </div>
-      </div>
+
       <div class="srow">
         <div>
           <b>Text Caret</b>
-          <small>Show blinking cursor in search bar</small>
+          <small class="desc">Show blinking cursor in search bar</small>
         </div>
         <button
           class="sw"
@@ -588,7 +648,7 @@
       <div class="srow">
         <div>
           <b>File &amp; Folder Search</b>
-          <small>Search user folders and all indexed drives</small>
+          <small class="desc">Search user folders and all indexed drives</small>
         </div>
         <button
           class="sw"
@@ -603,7 +663,7 @@
       <div class="srow">
         <div>
           <b>Flow Launcher Prefix Compatibility</b>
-          <small>Ignore leading prefix tokens like "et" when searching</small>
+          <small class="desc">Ignore leading prefix tokens like "et" when searching</small>
         </div>
         <button
           class="sw"
@@ -661,11 +721,11 @@
           </div>
         </div>
       {/if}
-    {:else if activeCategory === "features"}
+    {:else if activeCategory === "clipboard"}
       <div class="srow">
         <div>
           <b>Clipboard History</b>
-          <small>Monitor, store and search recent clipboard entries</small>
+          <small class="desc">Monitor, store and search recent clipboard entries</small>
         </div>
         <button
           class="sw"
@@ -679,11 +739,48 @@
       </div>
 
       {#if featuresConfig.clipboardHistory}
+        <div class="srow">
+          <div>
+            <b>Clipboard History Shortcut</b>
+            <small class="desc">Global hotkey to open clipboard history directly</small>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input
+              class="shortcut-input"
+              bind:value={clipboardShortcutInput}
+              onblur={applyShortcuts}
+              onkeydown={(e) => {
+                if (e.key === "Enter") applyShortcuts();
+              }}
+              placeholder="e.g. Alt+Shift+V"
+            />
+            <button
+              class="btn-sub"
+              type="button"
+              onclick={applyShortcuts}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+
+        {#if clipboardShortcutInput.toLowerCase().includes("win") && clipboardShortcutInput.toLowerCase().includes("v")}
+          <div class="shortcut-win-v-notice">
+            ⚠️ <strong>Win + V</strong> is reserved exclusively by Windows for its native clipboard manager and cannot be registered safely by third-party desktop applications. Use <strong>Alt + Shift + V</strong> or another modifier combination.
+          </div>
+        {/if}
+
+        {#if shortcutMessage && activeCategory === "clipboard"}
+          <div class="shortcut-status-banner" class:error={shortcutIsError}>
+            {shortcutMessage}
+          </div>
+        {/if}
+
         <!-- Exclusion Filter Mode -->
         <div class="srow">
           <div>
             <b>Clipboard Filter Mode</b>
-            <small>
+            <small class="desc">
               {#if filtersConfig.mode === "ignore"}
                 Ignore completely: matching items are never captured or saved
               {:else}
@@ -719,7 +816,7 @@
         <div class="srow">
           <div>
             <b>Filter Secrets &amp; Tokens</b>
-            <small>API keys, private keys, passwords, auth tokens</small>
+            <small class="desc">API keys, private keys, passwords, auth tokens</small>
           </div>
           <button
             class="sw"
@@ -738,7 +835,7 @@
         <div class="srow">
           <div>
             <b>Filter camelCase Identifiers</b>
-            <small>Exclude camelCase code words and variables</small>
+            <small class="desc">Exclude camelCase code words and variables</small>
           </div>
           <button
             class="sw"
@@ -757,7 +854,7 @@
         <div class="srow">
           <div>
             <b>Filter Credit Card Numbers</b>
-            <small>Match Visa, MasterCard, Amex, and Discover patterns</small>
+            <small class="desc">Match Visa, MasterCard, Amex, and Discover patterns</small>
           </div>
           <button
             class="sw"
@@ -777,7 +874,7 @@
         <div class="filter-section">
           <div class="filter-section-header">
             <b>Custom Filters</b>
-            <small>Add custom regex or literal strings to exclude</small>
+            <small class="desc">Add custom regex or literal strings to exclude</small>
           </div>
 
           {#if filtersConfig.customFilters.length > 0}
@@ -891,7 +988,7 @@
           <div class="srow">
             <div>
               <b>Safe Inspection</b>
-              <small>{filteredHistory.length} hidden filtered entries safely stored</small>
+              <small class="desc">{filteredHistory.length} hidden filtered entries safely stored</small>
             </div>
             <button
               type="button"
@@ -963,11 +1060,26 @@
             </div>
           {/if}
         {/if}
+
+        <div class="srow storage-row">
+          <div>
+            <b>Clipboard History Storage</b>
+            <small class="desc">{clipboardCount} {clipboardCount === 1 ? "entry" : "entries"} stored locally</small>
+          </div>
+          <button
+            class="btn-sub danger"
+            type="button"
+            onclick={handleClearClipboard}
+          >
+            Clear History
+          </button>
+        </div>
       {/if}
+    {:else if activeCategory === "features"}
       <div class="srow">
         <div>
           <b>Preview Panel</b>
-          <small>Show details and metadata for selected item</small>
+          <small class="desc">Show details, metadata, and quick actions for the selected item</small>
         </div>
         <button
           class="sw"
@@ -978,10 +1090,11 @@
           onclick={() => setSetting("preview", !settings.preview)}
         ></button>
       </div>
+
       <div class="srow">
         <div>
           <b>Indexing Progress Bar</b>
-          <small>Show progress indicator while background indexing</small>
+          <small class="desc">Show subtle progress indicator while background indexing</small>
         </div>
         <button
           class="sw"
@@ -992,89 +1105,66 @@
           onclick={() => setSetting("progressBar", !settings.progressBar)}
         ></button>
       </div>
-    {:else if activeCategory === "shortcuts"}
+
       <div class="srow">
         <div>
-          <b>Launcher Shortcut</b>
-          <small>Global hotkey to show or hide the command launcher</small>
-        </div>
-        <input
-          class="shortcut-input"
-          bind:value={launcherShortcutInput}
-          onblur={applyShortcuts}
-          onkeydown={(e) => {
-            if (e.key === "Enter") applyShortcuts();
-          }}
-          placeholder="e.g. Alt+Space"
-        />
-      </div>
-      <div class="srow">
-        <div>
-          <b>Clipboard History Shortcut</b>
-          <small>
-            {#if !featuresConfig.clipboardHistory}
-              <span style="color: var(--mut);">Inactive (Clipboard History is disabled)</span>
+          <b>System Index</b>
+          <small class="desc">
+            {#if isIndexing}
+              Indexing applications and files…
+            {:else if indexStats.isIndexed}
+              {indexStats.totalApps} apps, {indexStats.totalFiles} files indexed
             {:else}
-              Global hotkey to open clipboard history directly
+              Index ready
             {/if}
           </small>
-        </div>
-        <input
-          class="shortcut-input"
-          bind:value={clipboardShortcutInput}
-          disabled={!featuresConfig.clipboardHistory}
-          onblur={applyShortcuts}
-          onkeydown={(e) => {
-            if (e.key === "Enter") applyShortcuts();
-          }}
-          placeholder="e.g. Alt+Shift+V"
-        />
-      </div>
-
-      {#if !featuresConfig.clipboardHistory}
-        <div class="shortcut-status-banner">
-          ℹ️ Clipboard History is disabled in Features. Its global keyboard shortcut is inactive.
-        </div>
-      {/if}
-
-      {#if (launcherShortcutInput.toLowerCase().includes("win") && launcherShortcutInput.toLowerCase().includes("v")) || (clipboardShortcutInput.toLowerCase().includes("win") && clipboardShortcutInput.toLowerCase().includes("v"))}
-        <div class="shortcut-win-v-notice">
-          ⚠️ <strong>Win + V</strong> is reserved exclusively by Windows for its native clipboard manager and cannot be registered safely by third-party desktop applications. Use <strong>Alt + Shift + V</strong> or another modifier combination.
-        </div>
-      {/if}
-
-      {#if shortcutMessage}
-        <div class="shortcut-status-banner" class:error={shortcutIsError}>
-          {shortcutMessage}
-        </div>
-      {/if}
-
-      <div class="srow">
-        <div>
-          <b>Apply Changes</b>
-          <small>Re-register global shortcuts at runtime</small>
         </div>
         <button
           class="btn-sub"
           type="button"
-          onclick={applyShortcuts}
+          disabled={isIndexing}
+          onclick={triggerReindex}
         >
-          Save Shortcuts
+          {isIndexing ? "Indexing…" : "Re-index now"}
         </button>
       </div>
-
-      <div class="srow storage-row">
-        <div>
-          <b>Clipboard History Storage</b>
-          <small>{clipboardCount} {clipboardCount === 1 ? "entry" : "entries"} stored locally</small>
+    {:else if activeCategory === "about"}
+      <div class="about-card">
+        <div class="about-header">
+          <div class="logo about-logo">
+            <svg viewBox="0 0 64 64" width="24" height="24" fill="currentColor">
+              <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
+            </svg>
+          </div>
+          <div>
+            <div class="about-title-row">
+              <span class="about-title">Lux</span>
+              <span class="about-ver">v0.1.0</span>
+            </div>
+            <p class="about-desc">
+              Fast, keyboard-first desktop launcher and productivity tool for Windows.
+            </p>
+          </div>
         </div>
-        <button
-          class="btn-sub danger"
-          type="button"
-          onclick={handleClearClipboard}
-        >
-          Clear History
-        </button>
+
+        <div class="about-specs">
+          <div class="about-spec-row">
+            <span class="spec-label">Runtime</span>
+            <span class="spec-val">Tauri 2 · Rust</span>
+          </div>
+          <div class="about-spec-row">
+            <span class="spec-label">Frontend</span>
+            <span class="spec-val">SvelteKit · TypeScript</span>
+          </div>
+          <div class="about-spec-row">
+            <span class="spec-label">Privacy</span>
+            <span class="spec-val">100% Local-First · No Telemetry</span>
+          </div>
+          <div class="about-spec-row">
+            <span class="spec-label">License</span>
+            <span class="spec-val">Open Source (MIT)</span>
+          </div>
+        </div>
       </div>
     {/if}
   </div>
@@ -1369,24 +1459,6 @@
     border-color: rgba(229, 72, 77, 0.25);
   }
 
-  .k {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  kbd {
-    background: var(--kbd);
-    color: var(--mut);
-    font:
-      500 11px Inter,
-      "Segoe UI",
-      system-ui,
-      sans-serif;
-    padding: 2px 6px;
-    border-radius: 4px;
-    box-shadow: inset 0 -1px 0 var(--line);
-  }
 
   .prefix-container {
     padding: 8px 4px 12px;
@@ -1703,43 +1775,133 @@
     font-size: 11px;
   }
 
-  /* Minimal Style */
-  :global(:root[data-style="minimal"]) .srow {
+  .badge {
+    background: var(--kbd);
+    color: var(--mut);
+    font:
+      500 11px Inter,
+      "Segoe UI",
+      system-ui,
+      sans-serif;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+  }
+
+  .about-card {
+    padding: 16px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .about-header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .about-logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    flex-shrink: 0;
+  }
+
+  .about-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .about-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+
+  .about-ver {
+    font-size: 12px;
+    color: var(--dim);
+    font-family: monospace;
+  }
+
+  .about-desc {
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--mut);
+    line-height: 1.4;
+  }
+
+  .about-specs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+
+  .about-spec-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+  }
+
+  .spec-label {
+    color: var(--dim);
+  }
+
+  .spec-val {
+    color: var(--fg);
+    font-weight: 500;
+  }
+
+  /* Information Density: Minimal hides secondary description helpers */
+  :global(:root[data-info-density="minimal"]) .srow small.desc {
+    display: none;
+  }
+
+  /* Information Density: Detailed emphasizes metadata and descriptions */
+  :global(:root[data-info-density="detailed"]) .srow b {
+    font-size: 13.5px;
+  }
+
+  :global(:root[data-info-density="detailed"]) .srow small {
+    font-size: 12px;
+  }
+
+  /* Layout Density: Compact */
+  :global(:root[data-layout-density="compact"]) .srow {
     padding: 8px 4px;
     gap: 10px;
   }
 
-  :global(:root[data-style="minimal"]) .stb {
+  :global(:root[data-layout-density="compact"]) .stb {
     height: 38px;
     padding: 0 14px;
   }
 
-  :global(:root[data-style="minimal"]) .set-tabs button {
-    padding: 5px 10px;
-    font-size: 12px;
+  :global(:root[data-layout-density="compact"]) .set-tabs button {
+    padding: 5px 8px;
+    font-size: 11.5px;
   }
 
-  /* Detailed Style */
-  :global(:root[data-style="detailed"]) .srow {
+  /* Layout Density: Comfortable */
+  :global(:root[data-layout-density="comfortable"]) .srow {
     padding: 16px 6px;
     gap: 20px;
   }
 
-  :global(:root[data-style="detailed"]) .srow b {
-    font-size: 14px;
-  }
-
-  :global(:root[data-style="detailed"]) .srow small {
-    font-size: 12.5px;
-  }
-
-  :global(:root[data-style="detailed"]) .stb {
+  :global(:root[data-layout-density="comfortable"]) .stb {
     height: 52px;
     padding: 0 20px;
   }
 
-  :global(:root[data-style="detailed"]) .set-tabs button {
-    padding: 8px 16px;
-    font-size: 13.5px;
+  :global(:root[data-layout-density="comfortable"]) .set-tabs button {
+    padding: 8px 14px;
+    font-size: 13px;
   }
 </style>

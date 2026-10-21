@@ -1,12 +1,21 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type SettingsCategory = "general" | "appearance" | "search" | "features" | "shortcuts";
-export type InterfaceStyle = "minimal" | "normal" | "detailed";
+export type SettingsCategory =
+  | "general"
+  | "appearance"
+  | "search"
+  | "clipboard"
+  | "features"
+  | "about";
+
+export type InformationDensity = "minimal" | "normal" | "detailed";
+export type LayoutDensity = "compact" | "normal" | "comfortable";
 
 export interface SettingsState {
   theme: "system" | "light" | "dark";
   layout: "list" | "grid";
-  interfaceStyle: InterfaceStyle;
+  informationDensity: InformationDensity;
+  layoutDensity: LayoutDensity;
   preview: boolean;
   login: boolean;
   progressBar: boolean;
@@ -20,7 +29,8 @@ export interface SettingsState {
 export const DEFAULT_SETTINGS: SettingsState = {
   theme: "system",
   layout: "list",
-  interfaceStyle: "normal",
+  informationDensity: "normal",
+  layoutDensity: "normal",
   preview: true,
   login: false,
   progressBar: true,
@@ -42,6 +52,18 @@ export function loadSettings(): SettingsState {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Backward compatibility mapping for old interfaceStyle
+      if (parsed.interfaceStyle && !parsed.informationDensity) {
+        parsed.informationDensity = parsed.interfaceStyle;
+      }
+      if (parsed.interfaceStyle && !parsed.layoutDensity) {
+        parsed.layoutDensity =
+          parsed.interfaceStyle === "minimal"
+            ? "compact"
+            : parsed.interfaceStyle === "detailed"
+              ? "comfortable"
+              : "normal";
+      }
       return { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch {
@@ -68,7 +90,9 @@ export function applyThemeAndCaret(settings: SettingsState): void {
   } else {
     root.dataset.theme = settings.theme;
   }
-  root.dataset.style = settings.interfaceStyle || "normal";
+  delete root.dataset.style;
+  root.dataset.infoDensity = settings.informationDensity || "normal";
+  root.dataset.layoutDensity = settings.layoutDensity || "normal";
   root.style.setProperty(
     "--caret-color",
     settings.caret ? "var(--fg)" : "transparent",
