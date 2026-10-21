@@ -1580,7 +1580,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 68px;
+    height: 64px;
     padding: 0 20px;
     border-bottom: 1px solid var(--line);
     flex: none;
@@ -2283,8 +2283,7 @@
   }
 
   :global(:root[data-info-density="minimal"]) .win.idle .bar {
-    height: 100%;
-    flex: 1;
+    flex: none;
     border-bottom: 0;
   }
 
@@ -2321,7 +2320,7 @@
 
   /* Layout Density: Compact */
   :global(:root[data-layout-density="compact"]) .bar {
-    height: 54px;
+    height: 52px;
     padding: 0 16px;
     gap: 8px;
   }
@@ -2431,7 +2430,7 @@
 
   /* Layout Density: Comfortable */
   :global(:root[data-layout-density="comfortable"]) .bar {
-    height: 76px;
+    height: 72px;
     padding: 0 24px;
     gap: 14px;
   }

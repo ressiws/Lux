@@ -1123,9 +1123,9 @@ mod tests {
         let work_size = PhysicalSize::new(2560, 1400);
         let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
 
-        // Sequence of height transitions: minimal idle (54, 68, 76), hints idle (124, 144, 164),
-        // search (500), clipboard (560), back to minimal idle (68)
-        let heights = [54, 68, 76, 124, 144, 164, 250, 380, 500, 560, 300, 68];
+        // Sequence of height transitions: minimal idle (78, 96, 114), hints idle (124, 144, 166),
+        // search (500), clipboard (560), back to minimal idle (96)
+        let heights = [78, 96, 114, 124, 144, 166, 250, 380, 500, 560, 300, 96];
         for h in heights {
             let size = PhysicalSize::new(760, h);
             let pos = calculate_launcher_position(size, work_pos, work_size);

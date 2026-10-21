@@ -114,19 +114,19 @@ export function getIdleLauncherHeight(
   if (infoDensity === "minimal") {
     switch (layoutDensity) {
       case "compact":
-        return 54;
+        return 78;
       case "comfortable":
-        return 76;
+        return 114;
       case "normal":
       default:
-        return 68;
+        return 96;
     }
   } else if (infoDensity === "detailed") {
     switch (layoutDensity) {
       case "compact":
         return 132;
       case "comfortable":
-        return 172;
+        return 174;
       case "normal":
       default:
         return 152;
@@ -137,7 +137,7 @@ export function getIdleLauncherHeight(
       case "compact":
         return 124;
       case "comfortable":
-        return 164;
+        return 166;
       case "normal":
       default:
         return 144;
