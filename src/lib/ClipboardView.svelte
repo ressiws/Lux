@@ -3,6 +3,7 @@
   import type { ClipboardEntry, ClipboardKind } from "./types";
   import {
     clearClipboardHistory,
+    clearClipboardPins,
     copyClipboardEntry,
     deleteClipboardEntry,
     getClipboardHistory,
@@ -27,7 +28,7 @@
 
   let settings = $state<SettingsState>(loadSettings());
 
-  const CLIPBOARD_WINDOW_HEIGHT = 560;
+  const CLIPBOARD_WINDOW_HEIGHT = 620;
 
   const PATHS: Record<string, string> = {
     all: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z",
@@ -295,6 +296,14 @@
       action: () => deleteItem(it),
     });
 
+    // Clear all pins
+    actions.push({
+      label: "Clear All Pins",
+      shortcut: "",
+      danger: true,
+      action: () => clearAllPins(),
+    });
+
     // Clear all
     actions.push({
       label: "Clear History",
@@ -367,6 +376,30 @@
       await loadHistory();
     } catch (err) {
       say(`Failed to delete: ${err}`);
+    }
+  }
+
+  let isClearingPins = false;
+  async function clearAllPins(): Promise<void> {
+    if (isClearingPins) return;
+    const pinnedCount = entries.filter((e) => e.isPinned).length;
+    if (pinnedCount === 0) {
+      say("No pinned entries to clear");
+      actionsOpen = false;
+      return;
+    }
+    if (window.confirm("Are you sure you want to clear all pinned entries?")) {
+      isClearingPins = true;
+      try {
+        await clearClipboardPins();
+        say("All pins cleared");
+        actionsOpen = false;
+        await loadHistory();
+      } catch (err) {
+        say(`Failed to clear pins: ${err}`);
+      } finally {
+        isClearingPins = false;
+      }
     }
   }
 
@@ -1467,7 +1500,8 @@
   }
 
   .pvbox {
-    flex: 0 0 52%;
+    flex: 0 0 46%;
+    max-height: 240px;
     width: 100%;
     box-sizing: border-box;
     display: grid;

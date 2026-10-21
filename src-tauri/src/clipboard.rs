@@ -474,6 +474,16 @@ impl ClipboardHistory {
         }
     }
 
+    pub fn clear_pins(&mut self) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|e| !e.is_pinned);
+        let removed = before - self.entries.len();
+        if self.entries.is_empty() {
+            self.last_content_hash = None;
+        }
+        removed
+    }
+
     pub fn toggle_pin(&mut self, id: &str) -> Option<bool> {
         for entry in &mut self.entries {
             if entry.id == id {
@@ -818,6 +828,19 @@ pub fn clear_clipboard_history(
 }
 
 #[tauri::command]
+pub fn clear_clipboard_pins(
+    app: AppHandle,
+    state: tauri::State<'_, ClipboardState>,
+) -> Result<usize, String> {
+    let count = {
+        let mut hist = state.history.lock().unwrap_or_else(|p| p.into_inner());
+        hist.clear_pins()
+    };
+    let _ = app.emit(EVENT_CLIPBOARD_UPDATED, ());
+    Ok(count)
+}
+
+#[tauri::command]
 pub fn toggle_pin_clipboard_entry(
     id: String,
     app: AppHandle,
@@ -971,6 +994,44 @@ mod tests {
         assert_eq!(history.list()[0].id, e1.id);
 
         history.clear();
+        assert_eq!(history.list().len(), 0);
+    }
+
+    #[test]
+    fn test_clear_clipboard_pins_preserves_unpinned_entries() {
+        let mut history = ClipboardHistory::new(10);
+        let e1 = history.add_text("Unpinned 1".to_string(), None).unwrap();
+        let e2 = history.add_text("Pinned 1".to_string(), None).unwrap();
+        let e3 = history.add_text("Unpinned 2".to_string(), None).unwrap();
+        let e4 = history.add_text("Pinned 2".to_string(), None).unwrap();
+
+        // Pin e2 and e4
+        assert_eq!(history.toggle_pin(&e2.id), Some(true));
+        assert_eq!(history.toggle_pin(&e4.id), Some(true));
+
+        assert_eq!(history.list().len(), 4);
+        assert_eq!(history.list().iter().filter(|e| e.is_pinned).count(), 2);
+
+        // Clear all pins
+        let removed = history.clear_pins();
+        assert_eq!(removed, 2);
+
+        // History now contains only the 2 unpinned entries
+        let remaining = history.list();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().all(|e| !e.is_pinned));
+        assert_eq!(remaining[0].id, e3.id);
+        assert_eq!(remaining[1].id, e1.id);
+
+        // Calling clear_pins again when 0 pinned entries exist safely returns 0
+        assert_eq!(history.clear_pins(), 0);
+        assert_eq!(history.list().len(), 2);
+    }
+
+    #[test]
+    fn test_clear_clipboard_pins_empty_collection() {
+        let mut history = ClipboardHistory::new(10);
+        assert_eq!(history.clear_pins(), 0);
         assert_eq!(history.list().len(), 0);
     }
 

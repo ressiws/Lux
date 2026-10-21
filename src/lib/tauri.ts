@@ -141,6 +141,10 @@ export async function clearClipboardHistory(): Promise<void> {
   return invoke<void>("clear_clipboard_history");
 }
 
+export async function clearClipboardPins(): Promise<number> {
+  return invoke<number>("clear_clipboard_pins");
+}
+
 export async function togglePinClipboardEntry(id: string): Promise<boolean> {
   return invoke<boolean>("toggle_pin_clipboard_entry", { id });
 }
@@ -215,4 +219,8 @@ export async function onFeaturesChanged(
   return listen<import("./types").FeaturesConfig>("lux://features-changed", (event) => {
     handler(event.payload);
   });
+}
+
+export async function getDefaultBrowser(): Promise<import("./types").DefaultBrowserInfo> {
+  return invoke<import("./types").DefaultBrowserInfo>("get_default_browser");
 }

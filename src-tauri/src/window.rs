@@ -57,6 +57,7 @@ pub struct LauncherState {
     idle_height: Mutex<f64>,
     last_toggle_instant: Mutex<Option<Instant>>,
     last_settings_toggle_instant: Mutex<Option<Instant>>,
+    is_expanded: AtomicBool,
 }
 
 impl LauncherState {
@@ -80,7 +81,16 @@ impl LauncherState {
             idle_height: Mutex::new(LAUNCHER_HEIGHT_IDLE),
             last_toggle_instant: Mutex::new(None),
             last_settings_toggle_instant: Mutex::new(None),
+            is_expanded: AtomicBool::new(false),
         }
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.is_expanded.load(Ordering::SeqCst)
+    }
+
+    pub fn set_expanded(&self, expanded: bool) {
+        self.is_expanded.store(expanded, Ordering::SeqCst);
     }
 
     pub fn idle_height(&self) -> f64 {
@@ -207,6 +217,7 @@ impl LauncherState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *mode = WindowMode::Launcher;
+        self.is_expanded.store(false, Ordering::SeqCst);
     }
 
     pub fn should_hide_on_focus_loss(&self) -> bool {
@@ -472,7 +483,7 @@ pub const LAUNCHER_WIDTH: f64 = 640.0;
 pub const CLIPBOARD_WIDTH: f64 = 760.0;
 pub const LAUNCHER_HEIGHT_IDLE: f64 = 96.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
-pub const CLIPBOARD_HEIGHT: f64 = 560.0;
+pub const CLIPBOARD_HEIGHT: f64 = 620.0;
 
 pub fn target_window_width(mode: WindowMode) -> f64 {
     match mode {
@@ -699,6 +710,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
 pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Result<(), String> {
     if let Some(state) = app.try_state::<LauncherState>() {
         state.set_mode(WindowMode::Launcher);
+        state.set_expanded(expanded);
     }
     let target_height = if expanded {
         LAUNCHER_HEIGHT_EXPANDED
@@ -923,6 +935,14 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 
     if mode == WindowMode::Clipboard {
         let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
+    } else if mode == WindowMode::Launcher {
+        let is_expanded = app
+            .try_state::<LauncherState>()
+            .map(|s| s.is_expanded())
+            .unwrap_or(false);
+        if is_expanded {
+            let _ = set_window_target_height(app, LAUNCHER_HEIGHT_EXPANDED);
+        }
     }
 
     Ok(())
@@ -1237,8 +1257,8 @@ mod tests {
         let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
 
         // Sequence of height transitions: minimal idle (78, 96, 114), hints idle (124, 144, 166),
-        // search (500), clipboard (560), back to minimal idle (96)
-        let heights = [78, 96, 114, 124, 144, 166, 250, 380, 500, 560, 300, 96];
+        // search (500), clipboard (620), back to minimal idle (96)
+        let heights = [78, 96, 114, 124, 144, 166, 250, 380, 500, 620, 300, 96];
         for h in heights {
             let size = PhysicalSize::new(760, h);
             let pos = calculate_launcher_position(size, work_pos, work_size);
@@ -1529,7 +1549,7 @@ mod tests {
         let work_size = PhysicalSize::new(1920, 1080);
 
         let compact_size = PhysicalSize::new(640, 96);
-        let clipboard_size = PhysicalSize::new(760, 560);
+        let clipboard_size = PhysicalSize::new(760, 620);
 
         let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
         let clipboard_pos = calculate_launcher_position(clipboard_size, work_pos, work_size);
@@ -1537,7 +1557,7 @@ mod tests {
         let compact_center_x = compact_pos.x + (640 / 2);
         let clipboard_center_x = clipboard_pos.x + (760 / 2);
         let compact_center_y = compact_pos.y + (96 / 2);
-        let clipboard_center_y = clipboard_pos.y + (560 / 2);
+        let clipboard_center_y = clipboard_pos.y + (620 / 2);
 
         assert_eq!(compact_center_x, 1920 / 2);
         assert_eq!(clipboard_center_x, 1920 / 2);
@@ -1550,7 +1570,7 @@ mod tests {
 
     #[test]
     fn test_animation_target_cancellation() {
-        let target = ((760u64) << 32) | 560u64;
+        let target = ((760u64) << 32) | 620u64;
         ANIMATION_TARGET.store(target, Ordering::SeqCst);
         assert_eq!(ANIMATION_TARGET.load(Ordering::SeqCst), target);
 

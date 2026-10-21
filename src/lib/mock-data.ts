@@ -406,6 +406,7 @@ export interface BuildSectionsOptions {
   subcategory?: string;
   browseResponse?: SearchResponse;
   mockItemsForTesting?: readonly LauncherItem[];
+  defaultBrowser?: { name: string; icon?: string | null };
 }
 
 function deduplicateLauncherItems(
@@ -666,7 +667,8 @@ export function buildSections(
         {
           category: "fb",
           name: `Search the web for “${trimmed}”`,
-          subtitle: "Default browser",
+          subtitle: options?.defaultBrowser?.name || "Default browser",
+          icon: options?.defaultBrowser?.icon || undefined,
           keywords: "",
           rightLabel: "Fallback",
           primaryLabel: "Search the Web",

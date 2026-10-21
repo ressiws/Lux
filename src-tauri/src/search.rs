@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
@@ -1904,7 +1905,56 @@ fn to_wide_null(s: &str) -> Vec<u16> {
         .collect()
 }
 
+static ACTIVE_LAUNCHES: LazyLock<Mutex<(HashSet<String>, HashMap<String, Instant>)>> =
+    LazyLock::new(|| Mutex::new((HashSet::new(), HashMap::new())));
+
+pub const LAUNCH_COOLDOWN_MS: u128 = 600;
+
+pub fn try_acquire_launch_guard(target: &str) -> bool {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    let (in_flight, history) = &mut *guard;
+
+    if in_flight.contains(target) {
+        return false;
+    }
+
+    if let Some(last) = history.get(target) {
+        if last.elapsed().as_millis() < LAUNCH_COOLDOWN_MS {
+            return false;
+        }
+    }
+
+    in_flight.insert(target.to_string());
+    true
+}
+
+pub fn release_launch_guard(target: &str, success: bool) {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    let (in_flight, history) = &mut *guard;
+    in_flight.remove(target);
+    if success {
+        history.insert(target.to_string(), Instant::now());
+    } else {
+        history.remove(target);
+    }
+}
+
+pub fn reset_launch_guard() {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    guard.0.clear();
+    guard.1.clear();
+}
+
 pub fn launch_target(path: &str) -> Result<(), String> {
+    if !try_acquire_launch_guard(path) {
+        return Ok(());
+    }
+    let res = launch_target_internal(path);
+    release_launch_guard(path, res.is_ok());
+    res
+}
+
+fn launch_target_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let wide_op = to_wide_null("open");
@@ -1944,6 +1994,16 @@ pub fn launch_target(path: &str) -> Result<(), String> {
 }
 
 pub fn launch_target_as_admin(path: &str) -> Result<(), String> {
+    let admin_key = format!("admin:{}", path);
+    if !try_acquire_launch_guard(&admin_key) {
+        return Ok(());
+    }
+    let res = launch_target_as_admin_internal(path);
+    release_launch_guard(&admin_key, res.is_ok());
+    res
+}
+
+fn launch_target_as_admin_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let wide_op = to_wide_null("runas");
@@ -1984,6 +2044,16 @@ pub fn launch_target_as_admin(path: &str) -> Result<(), String> {
 }
 
 pub fn reveal_in_folder(path: &str) -> Result<(), String> {
+    let reveal_key = format!("reveal:{}", path);
+    if !try_acquire_launch_guard(&reveal_key) {
+        return Ok(());
+    }
+    let res = reveal_in_folder_internal(path);
+    release_launch_guard(&reveal_key, res.is_ok());
+    res
+}
+
+fn reveal_in_folder_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer.exe")
@@ -2006,6 +2076,108 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
             .spawn()
             .map_err(|err| format!("Failed to open directory '{:?}': {err}", folder))?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultBrowserInfo {
+    pub name: String,
+    pub icon: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "shlwapi")]
+unsafe extern "system" {
+    fn AssocQueryStringW(
+        flags: u32,
+        str_type: u32,
+        psz_assoc: *const u16,
+        psz_extra: *const u16,
+        psz_out: *mut u16,
+        pcch_out: *mut u32,
+    ) -> u32;
+}
+
+pub fn get_default_browser_info() -> DefaultBrowserInfo {
+    #[cfg(target_os = "windows")]
+    {
+        const ASSOCF_NONE: u32 = 0;
+        const ASSOCSTR_EXECUTABLE: u32 = 2;
+        const ASSOCSTR_FRIENDLYAPP_NAME: u32 = 4;
+
+        let wide_https = to_wide_null("https");
+
+        // 1. Get executable path
+        let mut exe_len = 1024u32;
+        let mut exe_buf = vec![0u16; exe_len as usize];
+        let res_exe = unsafe {
+            AssocQueryStringW(
+                ASSOCF_NONE,
+                ASSOCSTR_EXECUTABLE,
+                wide_https.as_ptr(),
+                std::ptr::null(),
+                exe_buf.as_mut_ptr(),
+                &mut exe_len,
+            )
+        };
+
+        let exe_path_str = if res_exe == 0 && exe_len > 0 {
+            String::from_utf16_lossy(&exe_buf[..exe_len.saturating_sub(1) as usize])
+        } else {
+            String::new()
+        };
+
+        // 2. Get friendly name
+        let mut name_len = 1024u32;
+        let mut name_buf = vec![0u16; name_len as usize];
+        let res_name = unsafe {
+            AssocQueryStringW(
+                ASSOCF_NONE,
+                ASSOCSTR_FRIENDLYAPP_NAME,
+                wide_https.as_ptr(),
+                std::ptr::null(),
+                name_buf.as_mut_ptr(),
+                &mut name_len,
+            )
+        };
+
+        let friendly_name = if res_name == 0 && name_len > 0 {
+            let n = String::from_utf16_lossy(&name_buf[..name_len.saturating_sub(1) as usize]);
+            if !n.is_empty() {
+                n
+            } else {
+                "Default browser".to_string()
+            }
+        } else if !exe_path_str.is_empty() {
+            Path::new(&exe_path_str)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Default browser")
+                .to_string()
+        } else {
+            "Default browser".to_string()
+        };
+
+        // 3. Extract icon
+        let icon = if !exe_path_str.is_empty() {
+            get_or_extract_icon(Path::new(&exe_path_str))
+        } else {
+            None
+        };
+
+        DefaultBrowserInfo {
+            name: friendly_name,
+            icon,
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        DefaultBrowserInfo {
+            name: "Default browser".to_string(),
+            icon: None,
+        }
     }
 }
 
@@ -2622,5 +2794,40 @@ mod tests {
         // Gracefully returns None instead of crashing
         assert!(load_persisted_index_from_path(&temp_file).is_none());
         let _ = fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_launch_guard_prevents_duplicate_in_flight_and_rapid_invocations() {
+        reset_launch_guard();
+
+        let target_app = "C:\\Program Files\\TestApp\\app.exe";
+        let other_app = "C:\\Program Files\\Other\\other.exe";
+
+        // First attempt acquires the guard
+        assert!(try_acquire_launch_guard(target_app));
+
+        // Simultaneous second attempt while in flight is rejected
+        assert!(!try_acquire_launch_guard(target_app));
+
+        // Different application is not blocked
+        assert!(try_acquire_launch_guard(other_app));
+        release_launch_guard(other_app, true);
+
+        // After successful launch, rapid re-invocation within cooldown is prevented
+        release_launch_guard(target_app, true);
+        assert!(!try_acquire_launch_guard(target_app));
+
+        // On failure, guard is immediately reset so user can retry without delay
+        let failing_app = "C:\\NonExistent.exe";
+        assert!(try_acquire_launch_guard(failing_app));
+        release_launch_guard(failing_app, false);
+        assert!(try_acquire_launch_guard(failing_app));
+        release_launch_guard(failing_app, false);
+    }
+
+    #[test]
+    fn test_default_browser_info_query() {
+        let info = get_default_browser_info();
+        assert!(!info.name.is_empty(), "Default browser name must not be empty");
     }
 }

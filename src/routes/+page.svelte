@@ -30,6 +30,7 @@
     searchLauncher,
     setLauncherHeight,
     setWindowHeight,
+    getDefaultBrowser,
   } from "$lib/tauri";
   import SettingsView from "$lib/SettingsView.svelte";
   import {
@@ -55,6 +56,7 @@
     LauncherItem,
     LauncherSection,
     SearchResponse,
+    DefaultBrowserInfo,
   } from "$lib/types";
 
   function getWindowLabel(): string {
@@ -85,6 +87,8 @@
   let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
 
   let settings = $state<SettingsState>(loadSettings());
+  let defaultBrowser = $state<DefaultBrowserInfo | undefined>(undefined);
+  let isLaunching = false;
 
   let searchInput: HTMLInputElement | undefined = $state();
   let listContainer: HTMLDivElement | undefined = $state();
@@ -126,6 +130,7 @@
       filter: activeFilter,
       subcategory: "all",
       browseResponse,
+      defaultBrowser,
     });
     return base.flatMap((s) => s.items);
   });
@@ -140,6 +145,7 @@
       filter: activeFilter,
       subcategory: activeSubcategory,
       browseResponse,
+      defaultBrowser,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
@@ -294,7 +300,7 @@
     if (mode === "clipboard") {
       actionsOpen = false;
       try {
-        await setWindowHeight(560);
+        await setWindowHeight(620);
       } catch {
         // Ignore outside Tauri
       }
@@ -540,6 +546,7 @@
   }
 
   async function runSelected(): Promise<void> {
+    if (isLaunching) return;
     const item = selectedItem;
     if (!item) {
       return;
@@ -565,18 +572,41 @@
       return;
     }
     if (item.category === "fb") {
+      if (item.primaryLabel === "Search the Web") {
+        isLaunching = true;
+        try {
+          const url = `https://www.google.com/search?q=${encodeURIComponent(effectiveQuery.trim())}`;
+          await openTarget(url);
+          await dismissLauncher();
+        } catch (err) {
+          say(`Failed to open browser: ${err}`);
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
+        }
+        return;
+      }
+      if (item.primaryLabel === "Search Files") {
+        toggleFilter("files");
+        return;
+      }
       say("Searching…");
       return;
     }
     if (item.path) {
+      isLaunching = true;
       try {
         await openTarget(item.path);
         await dismissLauncher();
-        return;
       } catch (err) {
         say(`Failed to open: ${err}`);
-        return;
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
+      return;
     }
     say(`Opened ${item.name}`);
   }
@@ -609,6 +639,29 @@
       return;
     }
 
+    if (item.category === "fb") {
+      if (action.label === "Search the Web") {
+        if (isLaunching) return;
+        isLaunching = true;
+        try {
+          const url = `https://www.google.com/search?q=${encodeURIComponent(effectiveQuery.trim())}`;
+          await openTarget(url);
+          await dismissLauncher();
+        } catch (err) {
+          say(`Failed to open browser: ${err}`);
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
+        }
+        return;
+      }
+      if (action.label === "Search Files" || action.label === "Search Files for This Term") {
+        toggleFilter("files");
+        return;
+      }
+    }
+
     if (item.category === "calc" && item.calc) {
       if (action.label === "Copy Expression") {
         await copyAndAnnounce(item.calc.expression, item.calc.expression);
@@ -622,14 +675,19 @@
 
     if (action.label === "Reveal in Folder" || action.label === "Show in Files") {
       if (item.path) {
+        if (isLaunching) return;
+        isLaunching = true;
         try {
           await revealItemInFolder(item.path);
           await dismissLauncher();
-          return;
         } catch (err) {
           say(`Failed to reveal: ${err}`);
-          return;
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
         }
+        return;
       }
     }
 
@@ -642,14 +700,19 @@
 
     if (action.label === "Run as Administrator") {
       if (item.path) {
+        if (isLaunching) return;
+        isLaunching = true;
         try {
           await openTargetAsAdmin(item.path);
           await dismissLauncher();
-          return;
         } catch (err) {
           say(`Failed to run as admin: ${err}`);
-          return;
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
         }
+        return;
       }
     }
 
@@ -739,7 +802,22 @@
     return (selectedIndex + d + n) % n;
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
+  async function handleKeydown(event: KeyboardEvent): Promise<void> {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (actionsOpen) {
+        closeActionsPopover();
+        return;
+      }
+      if (activeFilter !== "all" || activeSubcategory !== "all") {
+        returnToAllCategories();
+        return;
+      }
+      void dismissLauncher();
+      return;
+    }
+
     const count = flatItems.length;
 
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
@@ -822,7 +900,6 @@
       }
 
       if (
-        event.key === "Escape" ||
         event.key === "Tab" ||
         ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k")
       ) {
@@ -841,11 +918,17 @@
       selectedItem.path
     ) {
       event.preventDefault();
+      if (isLaunching) return;
+      isLaunching = true;
       try {
-        void openTargetAsAdmin(selectedItem.path);
-        void dismissLauncher();
+        await openTargetAsAdmin(selectedItem.path);
+        await dismissLauncher();
       } catch (err) {
         say(`Failed to run as admin: ${err}`);
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
       return;
     }
@@ -857,11 +940,17 @@
       selectedItem?.path
     ) {
       event.preventDefault();
+      if (isLaunching) return;
+      isLaunching = true;
       try {
-        void revealItemInFolder(selectedItem.path);
-        void dismissLauncher();
+        await revealItemInFolder(selectedItem.path);
+        await dismissLauncher();
       } catch (err) {
         say(`Failed to reveal: ${err}`);
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
       return;
     }
@@ -910,16 +999,7 @@
       return;
     }
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      if (query.trim().length > 0) {
-        query = "";
-        selectedIndex = 0;
-        void performSearch("");
-      } else {
-        void dismissLauncher();
-      }
-    }
+
   }
 
   function handleRowHover(index: number): void {
@@ -1107,7 +1187,7 @@
       }
       appMode = "clipboard";
       actionsOpen = false;
-      void setWindowHeight(560);
+      void setWindowHeight(620);
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -1123,6 +1203,14 @@
         }
         if (!status.shortcut.registered) {
           shortcutWarning = `Shortcut ${status.shortcut.shortcut} unavailable`;
+        }
+      })
+      .catch(() => {});
+
+    void getDefaultBrowser()
+      .then((browser) => {
+        if (!disposed) {
+          defaultBrowser = browser;
         }
       })
       .catch(() => {});
@@ -1164,6 +1252,8 @@
 
     void onLauncherHidden(() => {
       resetLauncherState(false);
+      lastSyncedHeight = undefined;
+      windowExpanded = false;
       appMode = "launcher";
     }).then((unlisten) => {
       if (disposed) {

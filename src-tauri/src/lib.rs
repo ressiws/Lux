@@ -11,8 +11,8 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
-    clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
-    get_filtered_clipboard_history, toggle_pin_clipboard_entry,
+    clear_clipboard_history, clear_clipboard_pins, copy_clipboard_entry, delete_clipboard_entry,
+    get_clipboard_history, get_filtered_clipboard_history, toggle_pin_clipboard_entry,
 };
 use clipboard_filters::{
     get_clipboard_filters_config, save_clipboard_filters_config, validate_clipboard_filter,
@@ -72,6 +72,11 @@ fn reveal_item_in_folder(path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_image_thumbnail(path: String) -> Option<String> {
     search::get_image_thumbnail(path)
+}
+
+#[tauri::command]
+fn get_default_browser() -> search::DefaultBrowserInfo {
+    search::get_default_browser_info()
 }
 
 #[tauri::command]
@@ -228,7 +233,9 @@ pub fn run() {
             hide_settings,
             get_features_config,
             set_feature_enabled,
-            get_image_thumbnail
+            get_image_thumbnail,
+            clear_clipboard_pins,
+            get_default_browser
         ])
         .setup(|app| {
             let handle = app.handle();

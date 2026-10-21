@@ -158,3 +158,7 @@ export interface FeaturesConfig {
   readonly clipboardHistory: boolean;
 }
 
+export interface DefaultBrowserInfo {
+  readonly name: string;
+  readonly icon: string | null;
+}

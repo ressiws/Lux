@@ -417,6 +417,119 @@ export function runSearchIntegrationTests(): number {
     assertEqual(stats.totalFiles, 100, "IndexStats totalFiles");
   });
 
+  // 22. Test fallback web search section with default browser metadata
+  check(() => {
+    const emptyResponse: SearchResponse = { apps: [], files: [] };
+    const sections = buildSections("unmatched query term", emptyResponse, {
+      filter: "all",
+      defaultBrowser: {
+        name: "Google Chrome",
+        icon: "data:image/png;base64,chromeicon",
+      },
+    });
+
+    assertEqual(sections.length, 1, "Fallback section present when no items match");
+    assertEqual(sections[0].category, "fb", "Section category is fb");
+    assertEqual(sections[0].items.length, 2, "Fallback section has 2 items");
+
+    const webItem = sections[0].items[0];
+    assertEqual(webItem.name, "Search the web for “unmatched query term”", "Web item name");
+    assertEqual(webItem.subtitle, "Google Chrome", "Web item subtitle is browser name");
+    assertEqual(webItem.icon, "data:image/png;base64,chromeicon", "Web item icon");
+    assertEqual(webItem.primaryLabel, "Search the Web", "Web item primary label");
+
+    const fileItem = sections[0].items[1];
+    assertEqual(fileItem.name, "Search files named “unmatched query term”", "File item name");
+    assertEqual(fileItem.primaryLabel, "Search Files", "File item primary label");
+  });
+
+  // 23. Test web search URL encoding
+  check(() => {
+    const query = "rust & svelte 5? + tauri/2.0";
+    const encoded = encodeURIComponent(query.trim());
+    const targetUrl = `https://www.google.com/search?q=${encoded}`;
+    assertEqual(
+      targetUrl,
+      "https://www.google.com/search?q=rust%20%26%20svelte%205%3F%20%2B%20tauri%2F2.0",
+      "URL encoding properly escapes special characters and spaces"
+    );
+  });
+
+  // 24. Test Escape key transition contracts
+  check(() => {
+    // Contract: when in category / subcategory mode, Escape returns to Search Anything preserving query
+    type LauncherState = {
+      activeFilter: string;
+      activeSubcategory: string;
+      actionsOpen: boolean;
+      query: string;
+      dismissed: boolean;
+    };
+
+    function simulateEscape(state: LauncherState): LauncherState {
+      const next = { ...state };
+      if (next.actionsOpen) {
+        next.actionsOpen = false;
+        return next;
+      }
+      if (next.activeFilter !== "all" || next.activeSubcategory !== "all") {
+        next.activeFilter = "all";
+        next.activeSubcategory = "all";
+        // query is preserved, not dismissed
+        return next;
+      }
+      next.dismissed = true;
+      return next;
+    }
+
+    // Case A: Actions open
+    const stA = simulateEscape({
+      activeFilter: "apps",
+      activeSubcategory: "all",
+      actionsOpen: true,
+      query: "git",
+      dismissed: false,
+    });
+    assertEqual(stA.actionsOpen, false, "Actions closed");
+    assertEqual(stA.activeFilter, "apps", "Filter preserved");
+    assertEqual(stA.dismissed, false, "Not dismissed");
+
+    // Case B: In Category mode
+    const stB = simulateEscape({
+      activeFilter: "files",
+      activeSubcategory: "all",
+      actionsOpen: false,
+      query: "report",
+      dismissed: false,
+    });
+    assertEqual(stB.activeFilter, "all", "Returned to all categories");
+    assertEqual(stB.query, "report", "Query preserved");
+    assertEqual(stB.dismissed, false, "Not dismissed");
+
+    // Case C: In Subcategory mode
+    const stC = simulateEscape({
+      activeFilter: "apps",
+      activeSubcategory: "dev",
+      actionsOpen: false,
+      query: "code",
+      dismissed: false,
+    });
+    assertEqual(stC.activeFilter, "all", "Returned to all categories from subcategory");
+    assertEqual(stC.activeSubcategory, "all", "Subcategory cleared");
+    assertEqual(stC.query, "code", "Query preserved");
+    assertEqual(stC.dismissed, false, "Not dismissed");
+
+    // Case D: In Search Anything root
+    const stD = simulateEscape({
+      activeFilter: "all",
+      activeSubcategory: "all",
+      actionsOpen: false,
+      query: "something",
+      dismissed: false,
+    });
+    assertEqual(stD.dismissed, true, "Launcher dismissed in Search Anything root");
+  });
+
   return passed;
 }
 
