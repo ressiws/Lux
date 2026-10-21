@@ -53,6 +53,11 @@
   let shortcutsStatus = $state<ShortcutConfigStatus | null>(null);
   let shortcutMessage = $state("");
   let shortcutIsError = $state(false);
+  let launcherSaveSuccess = $state(false);
+  let clipboardSaveSuccess = $state(false);
+  let launcherSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let clipboardSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let isSavingShortcuts = $state(false);
   let clipboardCount = $state(0);
   let newPrefixInput = $state("");
 
@@ -265,7 +270,9 @@
     }
   }
 
-  async function applyShortcuts(): Promise<void> {
+  async function applyShortcuts(target?: "launcher" | "clipboard"): Promise<void> {
+    if (isSavingShortcuts) return;
+    isSavingShortcuts = true;
     shortcutMessage = "";
     shortcutIsError = false;
     try {
@@ -284,11 +291,28 @@
           "Failed to register shortcut";
       } else {
         shortcutIsError = false;
-        shortcutMessage = "Shortcuts saved and active";
+        shortcutMessage = "";
+
+        if (!target || target === "launcher") {
+          launcherSaveSuccess = true;
+          clearTimeout(launcherSaveTimer);
+          launcherSaveTimer = setTimeout(() => {
+            launcherSaveSuccess = false;
+          }, 1500);
+        }
+        if (!target || target === "clipboard") {
+          clipboardSaveSuccess = true;
+          clearTimeout(clipboardSaveTimer);
+          clipboardSaveTimer = setTimeout(() => {
+            clipboardSaveSuccess = false;
+          }, 1500);
+        }
       }
     } catch (err) {
       shortcutIsError = true;
       shortcutMessage = String(err);
+    } finally {
+      isSavingShortcuts = false;
     }
   }
 
@@ -360,6 +384,8 @@
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
+      clearTimeout(launcherSaveTimer);
+      clearTimeout(clipboardSaveTimer);
       if (unlistenIndexing) {
         unlistenIndexing();
       }
@@ -472,26 +498,49 @@
         </div>
         <div class="shortcut-group">
           <input
+            id="launcher-shortcut"
+            type="text"
             class="shortcut-input"
             bind:value={launcherShortcutInput}
-            onblur={applyShortcuts}
+            onblur={() => void applyShortcuts("launcher")}
             onkeydown={(e) => {
-              if (e.key === "Enter") applyShortcuts();
+              if (e.key === "Enter") void applyShortcuts("launcher");
             }}
             placeholder="e.g. Alt+Space"
+            aria-label="Launcher Global Shortcut"
           />
           <button
             class="btn-sub"
+            class:success={launcherSaveSuccess}
             type="button"
-            onclick={applyShortcuts}
+            disabled={isSavingShortcuts}
+            aria-label={launcherSaveSuccess ? "Shortcut saved successfully" : "Save shortcut"}
+            onclick={() => void applyShortcuts("launcher")}
           >
-            Save
+            {#if launcherSaveSuccess}
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>Saved</span>
+            {:else}
+              <span>Save</span>
+            {/if}
           </button>
         </div>
       </div>
 
-      {#if shortcutMessage && activeCategory === "general"}
-        <div class="shortcut-status-banner" class:error={shortcutIsError}>
+      {#if shortcutMessage && shortcutIsError && activeCategory === "general"}
+        <div class="shortcut-status-banner error">
           {shortcutMessage}
         </div>
       {/if}
@@ -746,20 +795,43 @@
           </div>
           <div class="shortcut-group">
             <input
+              id="clipboard-shortcut"
+              type="text"
               class="shortcut-input"
               bind:value={clipboardShortcutInput}
-              onblur={applyShortcuts}
+              onblur={() => void applyShortcuts("clipboard")}
               onkeydown={(e) => {
-                if (e.key === "Enter") applyShortcuts();
+                if (e.key === "Enter") void applyShortcuts("clipboard");
               }}
               placeholder="e.g. Alt+Shift+V"
+              aria-label="Clipboard History Shortcut"
             />
             <button
               class="btn-sub"
+              class:success={clipboardSaveSuccess}
               type="button"
-              onclick={applyShortcuts}
+              disabled={isSavingShortcuts}
+              aria-label={clipboardSaveSuccess ? "Shortcut saved successfully" : "Save shortcut"}
+              onclick={() => void applyShortcuts("clipboard")}
             >
-              Save
+              {#if clipboardSaveSuccess}
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                <span>Saved</span>
+              {:else}
+                <span>Save</span>
+              {/if}
             </button>
           </div>
         </div>
@@ -770,8 +842,8 @@
           </div>
         {/if}
 
-        {#if shortcutMessage && activeCategory === "clipboard"}
-          <div class="shortcut-status-banner" class:error={shortcutIsError}>
+        {#if shortcutMessage && shortcutIsError && activeCategory === "clipboard"}
+          <div class="shortcut-status-banner error">
             {shortcutMessage}
           </div>
         {/if}
@@ -1459,6 +1531,22 @@
 
   .btn-sub.danger:hover {
     background: rgba(229, 72, 77, 0.12);
+  }
+
+  .btn-sub.success {
+    background: #2e7d32 !important;
+    border-color: #2e7d32 !important;
+    color: #ffffff !important;
+  }
+
+  .btn-sub.success:hover {
+    background: #256628 !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn-sub {
+      transition: none !important;
+    }
   }
 
   .shortcut-group {
