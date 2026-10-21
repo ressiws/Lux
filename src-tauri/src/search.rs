@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 const MAX_DIR_DEPTH: usize = 6;
 const MAX_INDEXED_FILES: usize = 50000;
-const MAX_RESULTS_PER_CATEGORY: usize = 8;
+const MAX_RESULTS_PER_CATEGORY: usize = 50;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico", "tiff", "tif", "avif",
@@ -40,6 +42,10 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     "tmp",
     "temp",
     "windows",
+    "system32",
+    "syswow64",
+    "winsxs",
+    "users",
     "system volume information",
     "$recycle.bin",
     "$windows.~bt",
@@ -92,7 +98,7 @@ pub struct SearchResultItem {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedApp {
     pub name: String,
     pub subtitle: String,
@@ -106,7 +112,7 @@ pub struct IndexedApp {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile {
     pub name: String,
     pub subtitle: String,
@@ -119,6 +125,90 @@ pub struct IndexedFile {
     pub icon: Option<String>,
 }
 
+pub const INDEX_SCHEMA_VERSION: u32 = 1;
+pub const SEARCH_INDEX_FILE: &str = "search_index.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedSearchIndex {
+    pub schema_version: u32,
+    pub discovery_fingerprint: String,
+    pub app_version: String,
+    pub indexed_at: u64,
+    pub search_roots: Vec<String>,
+    pub ignored_directories: Vec<String>,
+    pub apps: Vec<IndexedApp>,
+    pub files: Vec<IndexedFile>,
+}
+
+impl PersistedSearchIndex {
+    pub fn is_up_to_date(&self, current_fingerprint: &str) -> bool {
+        self.schema_version == INDEX_SCHEMA_VERSION
+            && self.discovery_fingerprint == current_fingerprint
+    }
+}
+
+pub fn compute_discovery_fingerprint(home_dir: &Option<PathBuf>) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+
+    INDEX_SCHEMA_VERSION.hash(&mut hasher);
+
+    for name in IGNORED_DIR_NAMES {
+        name.hash(&mut hasher);
+    }
+
+    let search_roots = get_user_search_directories(home_dir);
+    for root in &search_roots {
+        root.to_string_lossy().to_lowercase().hash(&mut hasher);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for var in &[
+            "APPDATA",
+            "PROGRAMDATA",
+            "LOCALAPPDATA",
+            "USERPROFILE",
+            "PUBLIC",
+            "OneDrive",
+            "OneDriveConsumer",
+            "OneDriveCommercial",
+        ] {
+            if let Some(val) = std::env::var_os(var) {
+                val.to_string_lossy().to_lowercase().hash(&mut hasher);
+            }
+        }
+    }
+
+    format!("{:016x}", hasher.finish())
+}
+
+pub fn get_search_index_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join(SEARCH_INDEX_FILE))
+}
+
+pub fn save_persisted_index_to_path(path: &Path, index: &PersistedSearchIndex) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string(index).map_err(|e| e.to_string())?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, json).map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn load_persisted_index_from_path(path: &Path) -> Option<PersistedSearchIndex> {
+    if !path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 #[derive(Default)]
 pub struct SearchIndex {
     pub apps: Vec<IndexedApp>,
@@ -128,13 +218,19 @@ pub struct SearchIndex {
 
 pub struct SearchState {
     pub index: Arc<RwLock<SearchIndex>>,
+    pub is_indexing: Arc<AtomicBool>,
 }
 
 impl SearchState {
     pub fn new() -> Self {
         Self {
             index: Arc::new(RwLock::new(SearchIndex::default())),
+            is_indexing: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn is_indexing(&self) -> bool {
+        self.is_indexing.load(Ordering::Relaxed)
     }
 }
 
@@ -999,6 +1095,7 @@ fn walk_directory_files(
     dir: &Path,
     current_depth: usize,
     max_depth: usize,
+    seen_paths: &mut HashSet<PathBuf>,
     indexed_files: &mut Vec<IndexedFile>,
 ) {
     if current_depth > max_depth || indexed_files.len() >= MAX_INDEXED_FILES {
@@ -1033,6 +1130,15 @@ fn walk_directory_files(
 
         let path = entry.path();
 
+        #[cfg(target_os = "windows")]
+        let norm_path = PathBuf::from(path.to_string_lossy().to_lowercase());
+        #[cfg(not(target_os = "windows"))]
+        let norm_path = path.clone();
+
+        if !seen_paths.insert(norm_path) {
+            continue;
+        }
+
         if file_type.is_dir() {
             let lower_name = name_str.to_lowercase();
             if IGNORED_DIR_NAMES.contains(&lower_name.as_str()) {
@@ -1064,6 +1170,7 @@ fn walk_directory_files(
                 &path,
                 current_depth + 1,
                 max_depth,
+                seen_paths,
                 indexed_files,
             );
         } else if file_type.is_file() {
@@ -1177,6 +1284,36 @@ pub fn get_user_search_directories(home_dir: &Option<PathBuf>) -> Vec<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
+        // Add OneDrive directories (Desktop, Documents, Pictures, etc.)
+        let mut onedrive_roots = Vec::new();
+        if let Some(od) = std::env::var_os("OneDrive") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(od) = std::env::var_os("OneDriveConsumer") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(od) = std::env::var_os("OneDriveCommercial") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(home) = home_dir {
+            onedrive_roots.push(home.join("OneDrive"));
+            onedrive_roots.push(home.join("OneDrive - Personal"));
+        }
+        for od in onedrive_roots {
+            if od.is_dir() {
+                add_dir(od.join("Desktop"));
+                add_dir(od.join("Documents"));
+                add_dir(od.join("Pictures"));
+                add_dir(od);
+            }
+        }
+
+        if let Some(pub_dir) = std::env::var_os("PUBLIC") {
+            let pub_path = PathBuf::from(pub_dir);
+            add_dir(pub_path.join("Desktop"));
+            add_dir(pub_path.join("Documents"));
+        }
+
         let available_drives = get_available_windows_drives();
 
         // 1. Check common user folders on all drives first (e.g. D:\projects, C:\projects, etc.)
@@ -1272,6 +1409,34 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
             PathBuf::from(programdata).join("Microsoft\\Windows\\Start Menu\\Programs"),
         );
     }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        start_menu_roots.push(
+            PathBuf::from(appdata).join("Microsoft\\Windows\\Start Menu"),
+        );
+    }
+    if let Some(programdata) = std::env::var_os("PROGRAMDATA") {
+        start_menu_roots.push(
+            PathBuf::from(programdata).join("Microsoft\\Windows\\Start Menu"),
+        );
+    }
+    if let Some(localappdata) = std::env::var_os("LOCALAPPDATA") {
+        start_menu_roots.push(
+            PathBuf::from(localappdata).join("Programs"),
+        );
+    }
+    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+        let profile_path = PathBuf::from(userprofile);
+        start_menu_roots.push(profile_path.join("Desktop"));
+    }
+    if let Some(pub_dir) = std::env::var_os("PUBLIC") {
+        start_menu_roots.push(PathBuf::from(pub_dir).join("Desktop"));
+    }
+    if let Some(od) = std::env::var_os("OneDrive") {
+        start_menu_roots.push(PathBuf::from(od).join("Desktop"));
+    }
+    if let Some(od) = std::env::var_os("OneDriveConsumer") {
+        start_menu_roots.push(PathBuf::from(od).join("Desktop"));
+    }
 
     fn walk_shortcuts(
         dir: &Path,
@@ -1279,7 +1444,7 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
         seen_names: &mut HashSet<String>,
         apps: &mut Vec<IndexedApp>,
     ) {
-        if depth > 4 {
+        if depth > 6 {
             return;
         }
         let entries = match fs::read_dir(dir) {
@@ -1470,6 +1635,7 @@ pub fn build_full_search_index() -> SearchIndex {
     let apps = scan_linux_desktop_apps(home_dir.as_deref());
 
     let mut files = Vec::new();
+    let mut seen_paths = HashSet::new();
     let search_roots = get_user_search_directories(&home_dir);
 
     for root in search_roots {
@@ -1477,6 +1643,7 @@ pub fn build_full_search_index() -> SearchIndex {
             &root,
             0,
             MAX_DIR_DEPTH,
+            &mut seen_paths,
             &mut files,
         );
     }
@@ -1668,7 +1835,11 @@ pub fn search_index(
         .map(|(_, file)| {
             let mut item = build_file_search_result(file);
             if file.is_image {
-                item.thumbnail = get_or_generate_thumbnail(&file.path);
+                if let Ok(guard) = THUMBNAIL_CACHE.read() {
+                    if let Some(cached) = guard.get(&file.path) {
+                        item.thumbnail = cached.clone();
+                    }
+                }
             }
             item
         })
@@ -1734,7 +1905,56 @@ fn to_wide_null(s: &str) -> Vec<u16> {
         .collect()
 }
 
+static ACTIVE_LAUNCHES: LazyLock<Mutex<(HashSet<String>, HashMap<String, Instant>)>> =
+    LazyLock::new(|| Mutex::new((HashSet::new(), HashMap::new())));
+
+pub const LAUNCH_COOLDOWN_MS: u128 = 600;
+
+pub fn try_acquire_launch_guard(target: &str) -> bool {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    let (in_flight, history) = &mut *guard;
+
+    if in_flight.contains(target) {
+        return false;
+    }
+
+    if let Some(last) = history.get(target) {
+        if last.elapsed().as_millis() < LAUNCH_COOLDOWN_MS {
+            return false;
+        }
+    }
+
+    in_flight.insert(target.to_string());
+    true
+}
+
+pub fn release_launch_guard(target: &str, success: bool) {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    let (in_flight, history) = &mut *guard;
+    in_flight.remove(target);
+    if success {
+        history.insert(target.to_string(), Instant::now());
+    } else {
+        history.remove(target);
+    }
+}
+
+pub fn reset_launch_guard() {
+    let mut guard = ACTIVE_LAUNCHES.lock().unwrap_or_else(|p| p.into_inner());
+    guard.0.clear();
+    guard.1.clear();
+}
+
 pub fn launch_target(path: &str) -> Result<(), String> {
+    if !try_acquire_launch_guard(path) {
+        return Ok(());
+    }
+    let res = launch_target_internal(path);
+    release_launch_guard(path, res.is_ok());
+    res
+}
+
+fn launch_target_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let wide_op = to_wide_null("open");
@@ -1774,6 +1994,16 @@ pub fn launch_target(path: &str) -> Result<(), String> {
 }
 
 pub fn launch_target_as_admin(path: &str) -> Result<(), String> {
+    let admin_key = format!("admin:{}", path);
+    if !try_acquire_launch_guard(&admin_key) {
+        return Ok(());
+    }
+    let res = launch_target_as_admin_internal(path);
+    release_launch_guard(&admin_key, res.is_ok());
+    res
+}
+
+fn launch_target_as_admin_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let wide_op = to_wide_null("runas");
@@ -1814,6 +2044,16 @@ pub fn launch_target_as_admin(path: &str) -> Result<(), String> {
 }
 
 pub fn reveal_in_folder(path: &str) -> Result<(), String> {
+    let reveal_key = format!("reveal:{}", path);
+    if !try_acquire_launch_guard(&reveal_key) {
+        return Ok(());
+    }
+    let res = reveal_in_folder_internal(path);
+    release_launch_guard(&reveal_key, res.is_ok());
+    res
+}
+
+fn reveal_in_folder_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer.exe")
@@ -1839,6 +2079,108 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultBrowserInfo {
+    pub name: String,
+    pub icon: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "shlwapi")]
+unsafe extern "system" {
+    fn AssocQueryStringW(
+        flags: u32,
+        str_type: u32,
+        psz_assoc: *const u16,
+        psz_extra: *const u16,
+        psz_out: *mut u16,
+        pcch_out: *mut u32,
+    ) -> u32;
+}
+
+pub fn get_default_browser_info() -> DefaultBrowserInfo {
+    #[cfg(target_os = "windows")]
+    {
+        const ASSOCF_NONE: u32 = 0;
+        const ASSOCSTR_EXECUTABLE: u32 = 2;
+        const ASSOCSTR_FRIENDLYAPP_NAME: u32 = 4;
+
+        let wide_https = to_wide_null("https");
+
+        // 1. Get executable path
+        let mut exe_len = 1024u32;
+        let mut exe_buf = vec![0u16; exe_len as usize];
+        let res_exe = unsafe {
+            AssocQueryStringW(
+                ASSOCF_NONE,
+                ASSOCSTR_EXECUTABLE,
+                wide_https.as_ptr(),
+                std::ptr::null(),
+                exe_buf.as_mut_ptr(),
+                &mut exe_len,
+            )
+        };
+
+        let exe_path_str = if res_exe == 0 && exe_len > 0 {
+            String::from_utf16_lossy(&exe_buf[..exe_len.saturating_sub(1) as usize])
+        } else {
+            String::new()
+        };
+
+        // 2. Get friendly name
+        let mut name_len = 1024u32;
+        let mut name_buf = vec![0u16; name_len as usize];
+        let res_name = unsafe {
+            AssocQueryStringW(
+                ASSOCF_NONE,
+                ASSOCSTR_FRIENDLYAPP_NAME,
+                wide_https.as_ptr(),
+                std::ptr::null(),
+                name_buf.as_mut_ptr(),
+                &mut name_len,
+            )
+        };
+
+        let friendly_name = if res_name == 0 && name_len > 0 {
+            let n = String::from_utf16_lossy(&name_buf[..name_len.saturating_sub(1) as usize]);
+            if !n.is_empty() {
+                n
+            } else {
+                "Default browser".to_string()
+            }
+        } else if !exe_path_str.is_empty() {
+            Path::new(&exe_path_str)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Default browser")
+                .to_string()
+        } else {
+            "Default browser".to_string()
+        };
+
+        // 3. Extract icon
+        let icon = if !exe_path_str.is_empty() {
+            get_or_extract_icon(Path::new(&exe_path_str))
+        } else {
+            None
+        };
+
+        DefaultBrowserInfo {
+            name: friendly_name,
+            icon,
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        DefaultBrowserInfo {
+            name: "Default browser".to_string(),
+            icon: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexingStatusPayload {
@@ -1850,8 +2192,39 @@ pub struct IndexingStatusPayload {
 pub const EVENT_INDEXING_STATUS: &str = "lux://indexing-status";
 
 pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
+    let state = match app_handle.try_state::<SearchState>() {
+        Some(s) => s,
+        None => return,
+    };
+
+    if state
+        .is_indexing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Prevent duplicate concurrent indexing
+        return;
+    }
+
     std::thread::spawn(move || {
         use tauri::Emitter;
+
+        struct IndexingGuard {
+            is_indexing: Arc<AtomicBool>,
+        }
+        impl Drop for IndexingGuard {
+            fn drop(&mut self) {
+                self.is_indexing.store(false, Ordering::SeqCst);
+            }
+        }
+
+        let is_indexing_flag = match app_handle.try_state::<SearchState>() {
+            Some(s) => s.is_indexing.clone(),
+            None => return,
+        };
+        let _guard = IndexingGuard {
+            is_indexing: is_indexing_flag,
+        };
 
         let _ = app_handle.emit(
             EVENT_INDEXING_STATUS,
@@ -1870,6 +2243,38 @@ pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
             && let Ok(mut lock) = state.index.write()
         {
             *lock = index;
+        }
+
+        // Persist index to disk with schema version and discovery fingerprint
+        if let Some(path) = get_search_index_path(&app_handle) {
+            let home_dir = get_user_home_dir();
+            let fingerprint = compute_discovery_fingerprint(&home_dir);
+            let search_roots = get_user_search_directories(&home_dir)
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            let ignored_directories = IGNORED_DIR_NAMES.iter().map(|s| s.to_string()).collect();
+
+            if let Some(state) = app_handle.try_state::<SearchState>()
+                && let Ok(lock) = state.index.read()
+            {
+                let persisted = PersistedSearchIndex {
+                    schema_version: INDEX_SCHEMA_VERSION,
+                    discovery_fingerprint: fingerprint,
+                    app_version: env!("CARGO_PKG_VERSION").to_string(),
+                    indexed_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    search_roots,
+                    ignored_directories,
+                    apps: lock.apps.clone(),
+                    files: lock.files.clone(),
+                };
+                if let Err(err) = save_persisted_index_to_path(&path, &persisted) {
+                    eprintln!("Warning: failed to persist search index: {err}");
+                }
+            }
         }
 
         let _ = app_handle.emit(
@@ -2194,5 +2599,235 @@ mod tests {
             assert!(cached.is_some());
             let _ = fs::remove_file(&img_path);
         }
+    }
+    #[test]
+    fn test_walk_directory_files_deduplication() {
+        let temp_dir = std::env::temp_dir().join("lux_test_dedup");
+        let _ = fs::create_dir_all(&temp_dir);
+        let file1 = temp_dir.join("unique_file.txt");
+        let _ = fs::write(&file1, "sample");
+
+        let mut seen_paths = HashSet::new();
+        let mut indexed = Vec::new();
+
+        // First walk
+        walk_directory_files(&temp_dir, 0, 2, &mut seen_paths, &mut indexed);
+        let first_count = indexed.len();
+        assert!(first_count >= 1);
+
+        // Second walk with the same seen_paths must not add duplicates
+        walk_directory_files(&temp_dir, 0, 2, &mut seen_paths, &mut indexed);
+        assert_eq!(indexed.len(), first_count, "Duplicate paths must be skipped");
+
+        let _ = fs::remove_file(&file1);
+        let _ = fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_user_search_directories_no_duplicates() {
+        let home = get_user_home_dir();
+        let dirs = get_user_search_directories(&home);
+        let mut seen = HashSet::new();
+        for d in dirs {
+            let lower = d.to_string_lossy().to_lowercase();
+            assert!(seen.insert(lower), "Search directories must not contain duplicates");
+        }
+    }
+    #[test]
+    fn test_fresh_installation_no_existing_index() {
+        let non_existent = std::env::temp_dir().join("lux_test_fresh_non_existent_idx.json");
+        let _ = fs::remove_file(&non_existent);
+
+        assert!(load_persisted_index_from_path(&non_existent).is_none());
+        let default_index = SearchIndex::default();
+        assert!(!default_index.is_indexed);
+        assert!(default_index.apps.is_empty());
+        assert!(default_index.files.is_empty());
+    }
+
+    #[test]
+    fn test_existing_valid_index_no_unnecessary_rebuild() {
+        let temp_file = std::env::temp_dir().join("lux_test_valid_index.json");
+        let home = get_user_home_dir();
+        let fingerprint = compute_discovery_fingerprint(&home);
+
+        let persisted = PersistedSearchIndex {
+            schema_version: INDEX_SCHEMA_VERSION,
+            discovery_fingerprint: fingerprint.clone(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            indexed_at: 1234567890,
+            search_roots: vec![r"C:\Users\tester\Desktop".to_string()],
+            ignored_directories: vec!["node_modules".to_string()],
+            apps: vec![IndexedApp {
+                name: "Firefox".to_string(),
+                subtitle: String::new(),
+                path: PathBuf::from(r"C:\Firefox.lnk"),
+                location: r"C:\Firefox.exe".to_string(),
+                exec: None,
+                icon: None,
+                color: "#e8663d".to_string(),
+                keywords: String::new(),
+                size: None,
+                version: None,
+            }],
+            files: vec![IndexedFile {
+                name: "notes.txt".to_string(),
+                subtitle: "Documents".to_string(),
+                path: PathBuf::from(r"C:\notes.txt"),
+                location: r"C:\".to_string(),
+                is_image: false,
+                extension: "txt".to_string(),
+                right_label: "TXT".to_string(),
+                size: None,
+                icon: None,
+            }],
+        };
+
+        let save_res = save_persisted_index_to_path(&temp_file, &persisted);
+        assert!(save_res.is_ok());
+
+        let loaded = load_persisted_index_from_path(&temp_file);
+        assert!(loaded.is_some());
+        let loaded_index = loaded.unwrap();
+        assert!(loaded_index.is_up_to_date(&fingerprint), "Valid index must be recognized as up-to-date");
+        assert_eq!(loaded_index.apps.len(), 1);
+        assert_eq!(loaded_index.files.len(), 1);
+
+        let _ = fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_outdated_index_detected_on_schema_or_fingerprint_change() {
+        let temp_file = std::env::temp_dir().join("lux_test_outdated_index.json");
+        let home = get_user_home_dir();
+        let current_fingerprint = compute_discovery_fingerprint(&home);
+
+        // Case A: schema version mismatch
+        let outdated_schema = PersistedSearchIndex {
+            schema_version: INDEX_SCHEMA_VERSION + 99,
+            discovery_fingerprint: current_fingerprint.clone(),
+            app_version: "0.0.1".to_string(),
+            indexed_at: 1000,
+            search_roots: vec![],
+            ignored_directories: vec![],
+            apps: vec![],
+            files: vec![],
+        };
+        assert!(!outdated_schema.is_up_to_date(&current_fingerprint));
+
+        // Case B: fingerprint mismatch (e.g. OneDrive added or exclusions changed)
+        let outdated_fingerprint = PersistedSearchIndex {
+            schema_version: INDEX_SCHEMA_VERSION,
+            discovery_fingerprint: "old_different_hash".to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            indexed_at: 1000,
+            search_roots: vec![],
+            ignored_directories: vec![],
+            apps: vec![],
+            files: vec![],
+        };
+        assert!(!outdated_fingerprint.is_up_to_date(&current_fingerprint));
+
+        // Ensure we can still read existing apps from the file to preserve search during rebuild
+        let save_res = save_persisted_index_to_path(&temp_file, &outdated_fingerprint);
+        assert!(save_res.is_ok());
+        let loaded = load_persisted_index_from_path(&temp_file);
+        assert!(loaded.is_some());
+        let _ = fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_search_availability_while_indexing_in_progress() {
+        let state = SearchState::new();
+        state.is_indexing.store(true, Ordering::SeqCst);
+
+        // Prepopulate index with an item
+        if let Ok(mut lock) = state.index.write() {
+            lock.apps.push(IndexedApp {
+                name: "Discord".to_string(),
+                subtitle: String::new(),
+                path: PathBuf::from(r"C:\Discord.lnk"),
+                location: r"C:\Discord.exe".to_string(),
+                exec: None,
+                icon: None,
+                color: "#5865f2".to_string(),
+                keywords: String::new(),
+                size: None,
+                version: None,
+            });
+            lock.is_indexed = true;
+        }
+
+        assert!(state.is_indexing());
+
+        // Perform search while indexing is active
+        let guard = state.index.read().unwrap();
+        let (apps, files) = search_index(&guard, "disc");
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Discord");
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_concurrent_indexing_prevention() {
+        let state = SearchState::new();
+        // First acquisition succeeds
+        assert!(state
+            .is_indexing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok());
+
+        // Second acquisition fails (prevents concurrent indexing)
+        assert!(state
+            .is_indexing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err());
+
+        state.is_indexing.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_corrupt_index_file_error_handling() {
+        let temp_file = std::env::temp_dir().join("lux_test_corrupt_index.json");
+        let _ = fs::write(&temp_file, "{ not valid json %%%");
+
+        // Gracefully returns None instead of crashing
+        assert!(load_persisted_index_from_path(&temp_file).is_none());
+        let _ = fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_launch_guard_prevents_duplicate_in_flight_and_rapid_invocations() {
+        reset_launch_guard();
+
+        let target_app = "C:\\Program Files\\TestApp\\app.exe";
+        let other_app = "C:\\Program Files\\Other\\other.exe";
+
+        // First attempt acquires the guard
+        assert!(try_acquire_launch_guard(target_app));
+
+        // Simultaneous second attempt while in flight is rejected
+        assert!(!try_acquire_launch_guard(target_app));
+
+        // Different application is not blocked
+        assert!(try_acquire_launch_guard(other_app));
+        release_launch_guard(other_app, true);
+
+        // After successful launch, rapid re-invocation within cooldown is prevented
+        release_launch_guard(target_app, true);
+        assert!(!try_acquire_launch_guard(target_app));
+
+        // On failure, guard is immediately reset so user can retry without delay
+        let failing_app = "C:\\NonExistent.exe";
+        assert!(try_acquire_launch_guard(failing_app));
+        release_launch_guard(failing_app, false);
+        assert!(try_acquire_launch_guard(failing_app));
+        release_launch_guard(failing_app, false);
+    }
+
+    #[test]
+    fn test_default_browser_info_query() {
+        let info = get_default_browser_info();
+        assert!(!info.name.is_empty(), "Default browser name must not be empty");
     }
 }

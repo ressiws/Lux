@@ -31,6 +31,7 @@ pub enum WindowMode {
     Clipboard,
 }
 
+pub const TOGGLE_COOLDOWN_MS: u128 = 100;
 pub const WINDOW_POSITION_FILE: &str = "window_position.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +55,9 @@ pub struct LauncherState {
     settings_has_gained_focus: AtomicBool,
     saved_position: Mutex<Option<PersistentPosition>>,
     idle_height: Mutex<f64>,
+    last_toggle_instant: Mutex<Option<Instant>>,
+    last_settings_toggle_instant: Mutex<Option<Instant>>,
+    is_expanded: AtomicBool,
 }
 
 impl LauncherState {
@@ -75,7 +79,18 @@ impl LauncherState {
             settings_has_gained_focus: AtomicBool::new(false),
             saved_position: Mutex::new(saved_position),
             idle_height: Mutex::new(LAUNCHER_HEIGHT_IDLE),
+            last_toggle_instant: Mutex::new(None),
+            last_settings_toggle_instant: Mutex::new(None),
+            is_expanded: AtomicBool::new(false),
         }
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.is_expanded.load(Ordering::SeqCst)
+    }
+
+    pub fn set_expanded(&self, expanded: bool) {
+        self.is_expanded.store(expanded, Ordering::SeqCst);
     }
 
     pub fn idle_height(&self) -> f64 {
@@ -94,6 +109,42 @@ impl LauncherState {
 
     pub fn set_saved_position(&self, pos: Option<PersistentPosition>) {
         *self.saved_position.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = pos;
+    }
+
+    pub fn try_acquire_toggle_cooldown(&self) -> bool {
+        let mut guard = self
+            .last_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(last) = *guard {
+            if last.elapsed().as_millis() < TOGGLE_COOLDOWN_MS {
+                return false;
+            }
+        }
+        *guard = Some(Instant::now());
+        true
+    }
+
+    pub fn try_acquire_settings_toggle_cooldown(&self) -> bool {
+        let mut guard = self
+            .last_settings_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(last) = *guard {
+            if last.elapsed().as_millis() < TOGGLE_COOLDOWN_MS {
+                return false;
+            }
+        }
+        *guard = Some(Instant::now());
+        true
+    }
+
+    pub fn cancel_toggle_cooldown(&self) {
+        let mut guard = self
+            .last_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
     }
 
     pub fn status(&self) -> LauncherStatus {
@@ -166,6 +217,7 @@ impl LauncherState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *mode = WindowMode::Launcher;
+        self.is_expanded.store(false, Ordering::SeqCst);
     }
 
     pub fn should_hide_on_focus_loss(&self) -> bool {
@@ -408,7 +460,7 @@ mod win32_backdrop {
                 y,
                 cx,
                 cy,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOZORDER | SWP_NOACTIVATE | 0x0020 | 0x0100,
             );
         }
     }
@@ -428,15 +480,31 @@ pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Resul
 }
 
 pub const LAUNCHER_WIDTH: f64 = 640.0;
-pub const LAUNCHER_HEIGHT_IDLE: f64 = 96.0;
+pub const CLIPBOARD_WIDTH: f64 = 760.0;
+pub const LAUNCHER_HEIGHT_IDLE: f64 = 64.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
-pub const CLIPBOARD_HEIGHT: f64 = 560.0;
+pub const CLIPBOARD_HEIGHT: f64 = 620.0;
+
+pub fn target_window_width(mode: WindowMode) -> f64 {
+    match mode {
+        WindowMode::Clipboard => CLIPBOARD_WIDTH,
+        WindowMode::Launcher => LAUNCHER_WIDTH,
+    }
+}
 
 pub const SETTINGS_WINDOW_LABEL: &str = "settings";
 pub const SETTINGS_WIDTH: f64 = 480.0;
 pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ANIMATION_TARGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn cancel_resize_animation() {
+    RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    ANIMATION_TARGET.store(0, Ordering::SeqCst);
+    IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
+}
+
 
 pub fn get_window_position_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join(WINDOW_POSITION_FILE))
@@ -486,11 +554,24 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main window not found".to_string())?;
 
+    let mode = app
+        .try_state::<LauncherState>()
+        .map(|s| s.mode())
+        .unwrap_or(WindowMode::Launcher);
+
+    let target_width = target_window_width(mode);
+
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let current_physical = window.outer_size().map_err(|e| e.to_string())?;
     let target_physical_height = (target_height * scale_factor).round() as u32;
+    let target_physical_width = (target_width * scale_factor).round() as u32;
 
-    if current_physical.height == target_physical_height {
+    if current_physical.height == target_physical_height && current_physical.width == target_physical_width {
+        return Ok(());
+    }
+
+    let packed_target = ((target_physical_width as u64) << 32) | (target_physical_height as u64);
+    if ANIMATION_TARGET.load(Ordering::SeqCst) == packed_target {
         return Ok(());
     }
 
@@ -498,13 +579,13 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         .try_state::<LauncherState>()
         .and_then(|s| s.saved_position());
 
-    let width_physical = (LAUNCHER_WIDTH * scale_factor).round() as u32;
     let work_area = resolve_resize_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
 
     // When the window is hidden, snap immediately without animation
     if !window.is_visible().unwrap_or(false) {
+        ANIMATION_TARGET.store(0, Ordering::SeqCst);
         if let Some((work_pos, work_size)) = work_area {
-            let target_physical_size = PhysicalSize::new(width_physical, target_physical_height);
+            let target_physical_size = PhysicalSize::new(target_physical_width, target_physical_height);
             let target_pos = calculate_window_position(target_physical_size, work_pos, work_size, saved_pos);
             IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
             #[cfg(target_os = "windows")]
@@ -513,19 +594,17 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                     hwnd.0,
                     target_pos.x,
                     target_pos.y,
-                    width_physical as i32,
+                    target_physical_width as i32,
                     target_physical_height as i32,
                 );
-                IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
-                return Ok(());
             }
-            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let target_logical = tauri::LogicalSize::new(target_width, target_height);
             let _ = window.set_size(target_logical);
             let _ = window.set_position(target_pos);
             IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
         } else {
             IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
-            let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
+            let target_logical = tauri::LogicalSize::new(target_width, target_height);
             let _ = window.set_size(target_logical);
             let _ = window.center();
             IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
@@ -534,12 +613,24 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
     }
 
     let generation = RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    ANIMATION_TARGET.store(packed_target, Ordering::SeqCst);
     let window_clone = window.clone();
     let start_h = current_physical.height as f64;
     let end_h = target_physical_height as f64;
+    let start_w = current_physical.width as f64;
+    let end_w = target_physical_width as f64;
 
     IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
+        struct MovingGuard;
+        impl Drop for MovingGuard {
+            fn drop(&mut self) {
+                ANIMATION_TARGET.store(0, Ordering::SeqCst);
+                IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _moving_guard = MovingGuard;
+
         const STEPS: usize = 9;
         const STEP_DELAY_MS: u64 = 16;
 
@@ -551,9 +642,10 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
             // Cubic ease-out: 1.0 - (1.0 - t)^3
             let factor = 1.0 - (1.0 - t).powi(3);
             let current_physical_h = (start_h + (end_h - start_h) * factor).round() as u32;
+            let current_physical_w = (start_w + (end_w - start_w) * factor).round() as u32;
 
             if let Some((work_pos, work_size)) = work_area {
-                let current_size = PhysicalSize::new(width_physical, current_physical_h);
+                let current_size = PhysicalSize::new(current_physical_w, current_physical_h);
                 let current_pos = calculate_window_position(current_size, work_pos, work_size, saved_pos);
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window_clone.hwnd() {
@@ -561,19 +653,21 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                         hwnd.0,
                         current_pos.x,
                         current_pos.y,
-                        width_physical as i32,
+                        current_physical_w as i32,
                         current_physical_h as i32,
                     );
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
+                    let current_logical_w = current_physical_w as f64 / scale_factor;
                     let current_logical_h = current_physical_h as f64 / scale_factor;
-                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                    let _ = window_clone.set_size(tauri::LogicalSize::new(current_logical_w, current_logical_h));
                     let _ = window_clone.set_position(current_pos);
                 }
             } else {
+                let current_logical_w = current_physical_w as f64 / scale_factor;
                 let current_logical_h = current_physical_h as f64 / scale_factor;
-                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, current_logical_h));
+                let _ = window_clone.set_size(tauri::LogicalSize::new(current_logical_w, current_logical_h));
                 let _ = window_clone.center();
             }
 
@@ -584,7 +678,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
 
         if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
             if let Some((work_pos, work_size)) = work_area {
-                let end_size = PhysicalSize::new(width_physical, target_physical_height);
+                let end_size = PhysicalSize::new(target_physical_width, target_physical_height);
                 let end_pos = calculate_window_position(end_size, work_pos, work_size, saved_pos);
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window_clone.hwnd() {
@@ -592,27 +686,27 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                         hwnd.0,
                         end_pos.x,
                         end_pos.y,
-                        width_physical as i32,
+                        target_physical_width as i32,
                         target_physical_height as i32,
                     );
                 }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
-                    let _ = window_clone.set_position(end_pos);
-                }
+                let _ = window_clone.set_size(tauri::LogicalSize::new(target_width, target_height));
+                let _ = window_clone.set_position(end_pos);
             } else {
-                let _ = window_clone.set_size(tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height));
+                let _ = window_clone.set_size(tauri::LogicalSize::new(target_width, target_height));
                 let _ = window_clone.center();
             }
         }
-        IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
     });
 
     Ok(())
 }
 
 pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        state.set_mode(WindowMode::Launcher);
+        state.set_expanded(expanded);
+    }
     let target_height = if expanded {
         LAUNCHER_HEIGHT_EXPANDED
     } else {
@@ -773,10 +867,18 @@ pub fn position_window_centered<R: Runtime>(
 }
 
 pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_height: f64) {
-    position_window_centered(window, LAUNCHER_WIDTH, target_height);
+    let mode = window
+        .app_handle()
+        .try_state::<LauncherState>()
+        .map(|s| s.mode())
+        .unwrap_or(WindowMode::Launcher);
+    let target_width = target_window_width(mode);
+    position_window_centered(window, target_width, target_height);
 }
 
 pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    cancel_resize_animation();
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -790,15 +892,14 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .map(|s| s.mode())
         .unwrap_or(WindowMode::Launcher);
 
-    let target_height = match mode {
-        WindowMode::Clipboard => CLIPBOARD_HEIGHT,
-        WindowMode::Launcher => app
-            .try_state::<LauncherState>()
-            .map(|s| s.idle_height())
-            .unwrap_or(LAUNCHER_HEIGHT_IDLE),
-    };
+    let idle_h = app
+        .try_state::<LauncherState>()
+        .map(|s| s.idle_height())
+        .unwrap_or(LAUNCHER_HEIGHT_IDLE);
 
-    position_on_active_monitor(&window, target_height);
+    // Position and show the window from its compact state for the active mode
+    let target_w = target_window_width(mode);
+    position_window_centered(&window, target_w, idle_h);
 
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
@@ -828,10 +929,24 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         eprintln!("Warning: failed to emit launcher-shown event: {err}");
     }
 
+    if mode == WindowMode::Clipboard {
+        let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
+    } else if mode == WindowMode::Launcher {
+        let is_expanded = app
+            .try_state::<LauncherState>()
+            .map(|s| s.is_expanded())
+            .unwrap_or(false);
+        if is_expanded {
+            let _ = set_window_target_height(app, LAUNCHER_HEIGHT_EXPANDED);
+        }
+    }
+
     Ok(())
 }
 
 pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    cancel_resize_animation();
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -840,17 +955,18 @@ pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         state.reset_shown();
     }
 
-    let _ = set_launcher_height(app, false);
-
     if let Err(err) = window.emit(EVENT_LAUNCHER_HIDDEN, ()) {
         eprintln!("Warning: failed to emit launcher-hidden event: {err}");
     }
 
-    window
+    let hide_res = window
         .hide()
-        .map_err(|err| format!("Failed to hide launcher window: {err}"))?;
+        .map_err(|err| format!("Failed to hide launcher window: {err}"));
 
-    Ok(())
+    // Snap to idle height immediately now that the window is hidden, without any animation
+    let _ = set_launcher_height(app, false);
+
+    hide_res
 }
 
 pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool) {
@@ -912,6 +1028,7 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .ok_or_else(|| "Settings window is not available.".to_string())?;
 
     if let Some(state) = app.try_state::<LauncherState>() {
+        let _ = state.try_acquire_settings_toggle_cooldown();
         state.record_settings_shown();
     }
 
@@ -998,6 +1115,12 @@ pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: boo
 }
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        if !state.try_acquire_toggle_cooldown() {
+            return Ok(());
+        }
+    }
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -1037,6 +1160,12 @@ pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
         .unwrap_or(true);
     if !clipboard_enabled {
         return Err("Clipboard History is disabled in Settings.".to_string());
+    }
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        if !state.try_acquire_toggle_cooldown() {
+            return Ok(());
+        }
     }
 
     let window = app
@@ -1124,8 +1253,8 @@ mod tests {
         let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
 
         // Sequence of height transitions: minimal idle (78, 96, 114), hints idle (124, 144, 166),
-        // search (500), clipboard (560), back to minimal idle (96)
-        let heights = [78, 96, 114, 124, 144, 166, 250, 380, 500, 560, 300, 96];
+        // search (500), clipboard (620), back to minimal idle (96)
+        let heights = [52, 64, 72, 78, 96, 114, 124, 144, 166, 250, 380, 500, 620, 300, 64];
         for h in heights {
             let size = PhysicalSize::new(760, h);
             let pos = calculate_launcher_position(size, work_pos, work_size);
@@ -1354,5 +1483,94 @@ mod tests {
         let json = serde_json::to_string(&pos).unwrap();
         let parsed: PersistentPosition = serde_json::from_str(&json).unwrap();
         assert_eq!(pos, parsed);
+    }
+    #[test]
+    fn test_cooldown_mechanism_blocks_rapid_sub_100ms_toggles() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt+Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+            None,
+        );
+
+        // First attempt succeeds
+        assert!(state.try_acquire_toggle_cooldown());
+
+        // Immediate sub-100ms attempt is blocked
+        assert!(!state.try_acquire_toggle_cooldown(), "Sub-100ms toggle must be debounced");
+
+        // After cooldown is canceled/cleared, it succeeds again
+        state.cancel_toggle_cooldown();
+        assert!(state.try_acquire_toggle_cooldown());
+    }
+
+    #[test]
+    fn test_settings_cooldown_mechanism_blocks_rapid_toggles() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt+Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+            None,
+        );
+
+        assert!(state.try_acquire_settings_toggle_cooldown());
+        assert!(!state.try_acquire_settings_toggle_cooldown(), "Sub-100ms settings toggle must be debounced");
+    }
+
+    #[test]
+    fn test_cancel_resize_animation_bumps_generation() {
+        let gen_before = RESIZE_GENERATION.load(Ordering::SeqCst);
+        IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
+
+        cancel_resize_animation();
+
+        let gen_after = RESIZE_GENERATION.load(Ordering::SeqCst);
+        assert!(gen_after > gen_before, "Generation must increment to cancel animations");
+        assert!(!IS_PROGRAMMATIC_MOVING.load(Ordering::SeqCst), "Programmatic moving flag must reset");
+    }
+    #[test]
+    fn test_target_window_width_for_modes() {
+        assert_eq!(target_window_width(WindowMode::Launcher), 640.0);
+        assert_eq!(target_window_width(WindowMode::Clipboard), 760.0);
+    }
+    #[test]
+    fn test_compact_and_clipboard_share_horizontal_and_vertical_center() {
+        let work_pos = PhysicalPosition::new(0, 0);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let compact_size = PhysicalSize::new(640, 64);
+        let clipboard_size = PhysicalSize::new(760, 620);
+
+        let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
+        let clipboard_pos = calculate_launcher_position(clipboard_size, work_pos, work_size);
+
+        let compact_center_x = compact_pos.x + (640 / 2);
+        let clipboard_center_x = clipboard_pos.x + (760 / 2);
+        let compact_center_y = compact_pos.y + (64 / 2);
+        let clipboard_center_y = clipboard_pos.y + (620 / 2);
+
+        assert_eq!(compact_center_x, 1920 / 2);
+        assert_eq!(clipboard_center_x, 1920 / 2);
+        assert_eq!(compact_center_x, clipboard_center_x);
+
+        assert_eq!(compact_center_y, 1080 / 2);
+        assert_eq!(clipboard_center_y, 1080 / 2);
+        assert_eq!(compact_center_y, clipboard_center_y);
+    }
+
+    #[test]
+    fn test_animation_target_cancellation() {
+        let target = ((760u64) << 32) | 620u64;
+        ANIMATION_TARGET.store(target, Ordering::SeqCst);
+        assert_eq!(ANIMATION_TARGET.load(Ordering::SeqCst), target);
+
+        cancel_resize_animation();
+        assert_eq!(ANIMATION_TARGET.load(Ordering::SeqCst), 0);
     }
 }

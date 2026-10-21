@@ -30,6 +30,7 @@
     searchLauncher,
     setLauncherHeight,
     setWindowHeight,
+    getDefaultBrowser,
   } from "$lib/tauri";
   import SettingsView from "$lib/SettingsView.svelte";
   import {
@@ -55,6 +56,7 @@
     LauncherItem,
     LauncherSection,
     SearchResponse,
+    DefaultBrowserInfo,
   } from "$lib/types";
 
   function getWindowLabel(): string {
@@ -85,6 +87,8 @@
   let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
 
   let settings = $state<SettingsState>(loadSettings());
+  let defaultBrowser = $state<DefaultBrowserInfo | undefined>(undefined);
+  let isLaunching = false;
 
   let searchInput: HTMLInputElement | undefined = $state();
   let listContainer: HTMLDivElement | undefined = $state();
@@ -126,6 +130,7 @@
       filter: activeFilter,
       subcategory: "all",
       browseResponse,
+      defaultBrowser,
     });
     return base.flatMap((s) => s.items);
   });
@@ -140,6 +145,7 @@
       filter: activeFilter,
       subcategory: activeSubcategory,
       browseResponse,
+      defaultBrowser,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
@@ -273,6 +279,7 @@
   let lastSyncedHeight: number | undefined;
 
   async function syncWindowHeight(expanded: boolean): Promise<void> {
+    if (appMode === "clipboard") return;
     const targetHeight = expanded ? 500 : currentIdleHeight;
     if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
     windowExpanded = expanded;
@@ -293,7 +300,7 @@
     if (mode === "clipboard") {
       actionsOpen = false;
       try {
-        await setWindowHeight(560);
+        await setWindowHeight(620);
       } catch {
         // Ignore outside Tauri
       }
@@ -367,6 +374,7 @@
 
   function setQuery(val: string): void {
     query = val;
+    activeSubcategory = "all";
     selectedIndex = 0;
     selectedActionIndex = 0;
     actionsOpen = false;
@@ -447,6 +455,7 @@
 
   function resetLauncherState(shouldFocus: boolean): void {
     activeFilter = "all";
+    activeSubcategory = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
     query = "";
@@ -521,6 +530,7 @@
 
   async function triggerReindex(): Promise<void> {
     isIndexing = true;
+    browseCache.clear();
     say("Indexing applications and files…");
     try {
       await reindex();
@@ -536,6 +546,7 @@
   }
 
   async function runSelected(): Promise<void> {
+    if (isLaunching) return;
     const item = selectedItem;
     if (!item) {
       return;
@@ -561,18 +572,41 @@
       return;
     }
     if (item.category === "fb") {
+      if (item.primaryLabel === "Search the Web") {
+        isLaunching = true;
+        try {
+          const url = `https://www.google.com/search?q=${encodeURIComponent(effectiveQuery.trim())}`;
+          await openTarget(url);
+          await dismissLauncher();
+        } catch (err) {
+          say(`Failed to open browser: ${err}`);
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
+        }
+        return;
+      }
+      if (item.primaryLabel === "Search Files") {
+        toggleFilter("files");
+        return;
+      }
       say("Searching…");
       return;
     }
     if (item.path) {
+      isLaunching = true;
       try {
         await openTarget(item.path);
         await dismissLauncher();
-        return;
       } catch (err) {
         say(`Failed to open: ${err}`);
-        return;
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
+      return;
     }
     say(`Opened ${item.name}`);
   }
@@ -605,6 +639,29 @@
       return;
     }
 
+    if (item.category === "fb") {
+      if (action.label === "Search the Web") {
+        if (isLaunching) return;
+        isLaunching = true;
+        try {
+          const url = `https://www.google.com/search?q=${encodeURIComponent(effectiveQuery.trim())}`;
+          await openTarget(url);
+          await dismissLauncher();
+        } catch (err) {
+          say(`Failed to open browser: ${err}`);
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
+        }
+        return;
+      }
+      if (action.label === "Search Files" || action.label === "Search Files for This Term") {
+        toggleFilter("files");
+        return;
+      }
+    }
+
     if (item.category === "calc" && item.calc) {
       if (action.label === "Copy Expression") {
         await copyAndAnnounce(item.calc.expression, item.calc.expression);
@@ -618,14 +675,19 @@
 
     if (action.label === "Reveal in Folder" || action.label === "Show in Files") {
       if (item.path) {
+        if (isLaunching) return;
+        isLaunching = true;
         try {
           await revealItemInFolder(item.path);
           await dismissLauncher();
-          return;
         } catch (err) {
           say(`Failed to reveal: ${err}`);
-          return;
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
         }
+        return;
       }
     }
 
@@ -638,14 +700,19 @@
 
     if (action.label === "Run as Administrator") {
       if (item.path) {
+        if (isLaunching) return;
+        isLaunching = true;
         try {
           await openTargetAsAdmin(item.path);
           await dismissLauncher();
-          return;
         } catch (err) {
           say(`Failed to run as admin: ${err}`);
-          return;
+        } finally {
+          setTimeout(() => {
+            isLaunching = false;
+          }, 300);
         }
+        return;
       }
     }
 
@@ -677,6 +744,10 @@
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
+
+    if (activeSubcategory !== "all") {
+      activeSubcategory = "all";
+    }
 
     const q = effectiveQuery;
     if (q.trim().length === 0) {
@@ -731,7 +802,22 @@
     return (selectedIndex + d + n) % n;
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
+  async function handleKeydown(event: KeyboardEvent): Promise<void> {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (actionsOpen) {
+        closeActionsPopover();
+        return;
+      }
+      if (activeFilter !== "all" || activeSubcategory !== "all") {
+        returnToAllCategories();
+        return;
+      }
+      void dismissLauncher();
+      return;
+    }
+
     const count = flatItems.length;
 
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
@@ -814,7 +900,6 @@
       }
 
       if (
-        event.key === "Escape" ||
         event.key === "Tab" ||
         ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k")
       ) {
@@ -833,11 +918,17 @@
       selectedItem.path
     ) {
       event.preventDefault();
+      if (isLaunching) return;
+      isLaunching = true;
       try {
-        void openTargetAsAdmin(selectedItem.path);
-        void dismissLauncher();
+        await openTargetAsAdmin(selectedItem.path);
+        await dismissLauncher();
       } catch (err) {
         say(`Failed to run as admin: ${err}`);
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
       return;
     }
@@ -849,11 +940,17 @@
       selectedItem?.path
     ) {
       event.preventDefault();
+      if (isLaunching) return;
+      isLaunching = true;
       try {
-        void revealItemInFolder(selectedItem.path);
-        void dismissLauncher();
+        await revealItemInFolder(selectedItem.path);
+        await dismissLauncher();
       } catch (err) {
         say(`Failed to reveal: ${err}`);
+      } finally {
+        setTimeout(() => {
+          isLaunching = false;
+        }, 300);
       }
       return;
     }
@@ -902,16 +999,7 @@
       return;
     }
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      if (query.trim().length > 0) {
-        query = "";
-        selectedIndex = 0;
-        void performSearch("");
-      } else {
-        void dismissLauncher();
-      }
-    }
+
   }
 
   function handleRowHover(index: number): void {
@@ -1030,6 +1118,9 @@
     void getIndexStats()
       .then((stats) => {
         indexStats = stats;
+        if (typeof stats.isIndexing === "boolean") {
+          isIndexing = stats.isIndexing;
+        }
       })
       .catch(() => {});
 
@@ -1094,7 +1185,9 @@
         say("Clipboard History is disabled in Settings");
         return;
       }
-      void switchMode("clipboard");
+      appMode = "clipboard";
+      actionsOpen = false;
+      void setWindowHeight(620);
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -1114,16 +1207,26 @@
       })
       .catch(() => {});
 
+    void getDefaultBrowser()
+      .then((browser) => {
+        if (!disposed) {
+          defaultBrowser = browser;
+        }
+      })
+      .catch(() => {});
+
     void onIndexingStatus((payload) => {
       isIndexing = payload.isIndexing;
-      if (!payload.isIndexing && activeFilter !== "all") {
-        void loadBrowseData(activeFilter);
-      }
       if (!payload.isIndexing) {
+        browseCache.clear();
+        if (activeFilter !== "all") {
+          void loadBrowseData(activeFilter);
+        }
         indexStats = {
           totalApps: payload.totalApps,
           totalFiles: payload.totalFiles,
           isIndexed: true,
+          isIndexing: false,
         };
         void performSearch(query);
       }
@@ -1149,6 +1252,8 @@
 
     void onLauncherHidden(() => {
       resetLauncherState(false);
+      lastSyncedHeight = undefined;
+      windowExpanded = false;
       appMode = "launcher";
     }).then((unlisten) => {
       if (disposed) {
@@ -1545,7 +1650,7 @@
         <div class="sec">{section.title}</div>
         {#if isGrid}
           <div class="grid">
-            {#each section.items as item (item.category + ":" + (item.path || item.name))}
+            {#each section.items as item, itemIdx (item.category + ":" + (item.path || item.name) + ":" + itemIdx)}
               {@const itemIndex = flatItems.indexOf(item)}
               {@const isSelected = itemIndex === selectedIndex}
               {@const highlighted = splitHighlight(item.name, query)}
@@ -1612,7 +1717,7 @@
             {/each}
           </div>
         {:else}
-          {#each section.items as item (item.category + ":" + (item.path || item.name))}
+          {#each section.items as item, itemIdx (item.category + ":" + (item.path || item.name) + ":" + itemIdx)}
             {@const itemIndex = flatItems.indexOf(item)}
             {@const isSelected = itemIndex === selectedIndex}
             {#if item.category === "calc" && item.calc}
@@ -1983,11 +2088,18 @@
   }
 
   :global(html) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
     background: transparent !important;
     background-color: transparent !important;
   }
 
   :global(body) {
+    width: 100%;
+    height: 100%;
     margin: 0;
     padding: 0;
     background: transparent !important;
@@ -2010,8 +2122,8 @@
   }
 
   .win {
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     box-sizing: border-box;
     background: var(--bg);
     -webkit-backdrop-filter: blur(20px);
@@ -2025,8 +2137,8 @@
   }
 
   .win.idle {
+    width: 100%;
     height: 100%;
-    max-height: 100%;
     flex: none;
     overflow: hidden;
   }
@@ -2888,8 +3000,10 @@
   }
 
   .clipboard-win {
-    height: 560px;
-    max-height: 560px;
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    overflow: hidden;
   }
 
   /* Information Density: Minimal */

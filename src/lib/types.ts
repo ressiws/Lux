@@ -95,6 +95,7 @@ export interface IndexStats {
   readonly totalApps: number;
   readonly totalFiles: number;
   readonly isIndexed: boolean;
+  readonly isIndexing?: boolean;
 }
 
 export type ClipboardKind = "text" | "link" | "image" | "file" | "color";
@@ -157,3 +158,7 @@ export interface FeaturesConfig {
   readonly clipboardHistory: boolean;
 }
 
+export interface DefaultBrowserInfo {
+  readonly name: string;
+  readonly icon: string | null;
+}

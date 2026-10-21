@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod clipboard_filters;
+pub mod color;
 pub mod features;
 pub mod search;
 pub mod shortcuts;
@@ -10,8 +11,8 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
-    clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
-    get_filtered_clipboard_history, toggle_pin_clipboard_entry,
+    clear_clipboard_history, clear_clipboard_pins, copy_clipboard_entry, delete_clipboard_entry,
+    get_clipboard_history, get_filtered_clipboard_history, toggle_pin_clipboard_entry,
 };
 use clipboard_filters::{
     get_clipboard_filters_config, save_clipboard_filters_config, validate_clipboard_filter,
@@ -74,6 +75,11 @@ fn get_image_thumbnail(path: String) -> Option<String> {
 }
 
 #[tauri::command]
+fn get_default_browser() -> search::DefaultBrowserInfo {
+    search::get_default_browser_info()
+}
+
+#[tauri::command]
 fn set_launcher_height(
     expanded: bool,
     idle_height: Option<f64>,
@@ -112,6 +118,7 @@ struct IndexStats {
     total_apps: usize,
     total_files: usize,
     is_indexed: bool,
+    is_indexing: bool,
 }
 
 #[tauri::command]
@@ -121,11 +128,17 @@ fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
         total_apps: guard.apps.len(),
         total_files: guard.files.len(),
         is_indexed: guard.is_indexed,
+        is_indexing: state.is_indexing(),
     }
 }
 
 #[tauri::command]
 fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
+    if (height - window::CLIPBOARD_HEIGHT).abs() < 1.0 {
+        if let Some(state) = app.try_state::<window::LauncherState>() {
+            state.set_mode(window::WindowMode::Clipboard);
+        }
+    }
     window::set_window_target_height(&app, height)
 }
 
@@ -169,6 +182,25 @@ fn should_show_on_startup() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let build_result = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(settings_win) = app.get_webview_window(window::SETTINGS_WINDOW_LABEL) {
+                if settings_win.is_visible().unwrap_or(false) {
+                    let _ = settings_win.unminimize();
+                    let _ = settings_win.set_focus();
+                    return;
+                }
+            }
+
+            if let Some(state) = app.try_state::<window::LauncherState>() {
+                if state.mode() == window::WindowMode::Clipboard {
+                    let _ = window::show_launcher_window(app);
+                } else {
+                    let _ = window::show_launcher_window_explicit(app);
+                }
+            } else {
+                let _ = window::show_launcher_window_explicit(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -201,7 +233,9 @@ pub fn run() {
             hide_settings,
             get_features_config,
             set_feature_enabled,
-            get_image_thumbnail
+            get_image_thumbnail,
+            clear_clipboard_pins,
+            get_default_browser
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -261,8 +295,31 @@ pub fn run() {
             app.manage(clipboard_state);
 
             let search_state = search::SearchState::new();
+            let index_path = search::get_search_index_path(handle);
+            let home_dir = search::get_user_home_dir();
+            let current_fingerprint = search::compute_discovery_fingerprint(&home_dir);
+
+            let mut needs_background_reindex = true;
+
+            if let Some(ref path) = index_path {
+                if let Some(persisted) = search::load_persisted_index_from_path(path) {
+                    let up_to_date = persisted.is_up_to_date(&current_fingerprint);
+                    if let Ok(mut lock) = search_state.index.write() {
+                        lock.apps = persisted.apps;
+                        lock.files = persisted.files;
+                        lock.is_indexed = true;
+                    }
+                    if up_to_date {
+                        needs_background_reindex = false;
+                    }
+                }
+            }
+
             app.manage(search_state);
-            search::start_background_indexing(handle.clone());
+
+            if needs_background_reindex {
+                search::start_background_indexing(handle.clone());
+            }
 
             if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
                 && let Some(state) = handle.try_state::<LauncherState>()
