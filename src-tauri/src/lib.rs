@@ -128,6 +128,11 @@ fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
 
 #[tauri::command]
 fn set_window_height(app: AppHandle, height: f64) -> Result<(), String> {
+    if (height - window::CLIPBOARD_HEIGHT).abs() < 1.0 {
+        if let Some(state) = app.try_state::<window::LauncherState>() {
+            state.set_mode(window::WindowMode::Clipboard);
+        }
+    }
     window::set_window_target_height(&app, height)
 }
 

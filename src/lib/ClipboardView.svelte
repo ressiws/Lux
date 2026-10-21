@@ -629,7 +629,7 @@
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      stroke-width="1.6"
+      stroke-width="1.75"
       stroke-linecap="round"
       stroke-linejoin="round"
       aria-hidden="true"
@@ -1035,8 +1035,13 @@
       type="button"
       title="Switch to Launcher (Alt Space)"
       onclick={onSwitchToLauncher}
+      aria-label="Switch to Launcher"
     >
-      <div class="logo">L</div>
+      <div class="logo" aria-label="Lux">
+        <svg viewBox="0 0 64 64" width="12" height="12" fill="currentColor">
+          <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
+        </svg>
+      </div>
     </button>
     <span id="cnt">
       {flatItems.length} {flatItems.length === 1 ? "item" : "items"}
@@ -1121,8 +1126,8 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 68px;
-    padding: 0 14px 0 18px;
+    height: 64px;
+    padding: 0 18px;
     border-bottom: 1px solid var(--line);
     flex: none;
   }
@@ -1141,7 +1146,7 @@
     border: 0;
     outline: 0;
     color: var(--fg);
-    font: 400 22px Inter, "Segoe UI", system-ui, sans-serif;
+    font: 400 20px Inter, "Segoe UI", system-ui, sans-serif;
     letter-spacing: -0.01em;
   }
 
@@ -1182,15 +1187,14 @@
   .menu {
     position: absolute;
     right: 12px;
-    top: 62px;
+    top: 58px;
     width: 226px;
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(28px) saturate(1.6);
-    backdrop-filter: blur(28px) saturate(1.6);
+    background: var(--bg);
+    border: 1px solid var(--line);
     border-radius: 10px;
     box-shadow: var(--shadow);
     padding: 6px;
-    z-index: 6;
+    z-index: 10;
   }
 
   .menu h6 {
@@ -1247,7 +1251,7 @@
   }
 
   #list {
-    flex: 0 0 40%;
+    flex: 0 0 325px;
     min-width: 0;
     overflow-y: auto;
     padding: 4px 10px 10px;
@@ -1257,9 +1261,11 @@
   }
 
   .sec {
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 600;
     color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     padding: 12px 10px 6px;
     user-select: none;
     -webkit-user-select: none;
@@ -1271,7 +1277,7 @@
     gap: 12px;
     height: 48px;
     padding: 0 10px;
-    border-radius: 10px;
+    border-radius: 8px;
     cursor: default;
     user-select: none;
     -webkit-user-select: none;
@@ -1287,7 +1293,7 @@
     flex: none;
     width: 30px;
     height: 30px;
-    border-radius: 50%;
+    border-radius: 8px;
     user-select: none;
     -webkit-user-select: none;
     pointer-events: none;
@@ -1351,8 +1357,8 @@
   }
 
   .pv {
-    width: 60%;
-    flex: none;
+    flex: 1;
+    min-width: 0;
     border-left: 1px solid var(--line);
     display: flex;
     flex-direction: column;
@@ -1360,13 +1366,14 @@
   }
 
   .pvbox {
-    flex: 0 0 54%;
+    flex: 0 0 52%;
     width: 100%;
     box-sizing: border-box;
     display: grid;
     place-items: center;
     background: var(--sel);
     overflow: hidden;
+    position: relative;
   }
 
   .fill {
@@ -1382,10 +1389,12 @@
   }
 
   .ph {
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 600;
     color: var(--dim);
-    padding: 0 10px 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 4px 6px;
   }
 
   .stack {
@@ -1516,9 +1525,10 @@
     height: 100%;
     align-self: stretch;
     justify-self: stretch;
-    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, "Cascadia Code", "Segoe UI Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
     line-height: 1.55;
-    padding: 20px 22px;
+    padding: 16px 20px;
     max-height: 100%;
     overflow-y: auto;
     word-break: break-word;
@@ -1528,7 +1538,7 @@
 
   .pvi {
     box-sizing: border-box;
-    padding: 10px 22px 14px 16px;
+    padding: 12px 18px;
     overflow-y: auto;
     scrollbar-width: thin;
     flex: 1;
@@ -1542,7 +1552,7 @@
     justify-content: space-between;
     align-items: baseline;
     gap: 12px;
-    padding: 5px 10px;
+    padding: 6px 4px;
     position: relative;
     font-size: 12px;
     line-height: 1.3;
@@ -1557,8 +1567,8 @@
     content: "";
     position: absolute;
     top: 0;
-    left: 10px;
-    right: 10px;
+    left: 4px;
+    right: 4px;
     height: 1px;
     background: var(--line);
   }
@@ -1586,7 +1596,7 @@
     display: flex;
     align-items: center;
     height: 42px;
-    padding: 0 14px;
+    padding: 0 16px;
     border-top: 1px solid var(--line);
     gap: 10px;
     color: var(--mut);
@@ -1611,6 +1621,11 @@
     place-items: center;
     font-weight: 600;
     font-size: 11px;
+    flex: none;
+  }
+
+  .logo svg {
+    display: block;
   }
 
   .sp {
@@ -1682,16 +1697,15 @@
 
   .pop {
     position: absolute;
-    right: 10px;
-    bottom: 48px;
+    right: 16px;
+    bottom: 50px;
     width: 268px;
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(28px);
-    backdrop-filter: blur(28px);
+    background: var(--bg);
+    border: 1px solid var(--line);
     border-radius: 10px;
     box-shadow: var(--shadow);
     padding: 6px;
-    z-index: 4;
+    z-index: 10;
   }
 
   .pop .row {
@@ -1765,6 +1779,23 @@
   }
 
   /* Layout Density: Compact reduces dimensions, row heights and padding */
+  .clipboard-root[data-layout-density="compact"] #list,
+  :global(:root[data-layout-density="compact"]) .clipboard-root #list {
+    flex: 0 0 290px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .logo,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .logo {
+    width: 16px;
+    height: 16px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .logo svg,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .logo svg {
+    width: 10px;
+    height: 10px;
+  }
+
   .clipboard-root[data-layout-density="compact"] .bar,
   :global(:root[data-layout-density="compact"]) .clipboard-root .bar {
     height: 52px;
@@ -1821,6 +1852,23 @@
   }
 
   /* Layout Density: Comfortable provides spacious rows and larger touch/click targets */
+  .clipboard-root[data-layout-density="comfortable"] #list,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root #list {
+    flex: 0 0 350px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .logo,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .logo {
+    width: 20px;
+    height: 20px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .logo svg,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .logo svg {
+    width: 14px;
+    height: 14px;
+  }
+
   .clipboard-root[data-layout-density="comfortable"] .bar,
   :global(:root[data-layout-density="comfortable"]) .clipboard-root .bar {
     height: 70px;
