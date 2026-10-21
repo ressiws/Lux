@@ -4,6 +4,7 @@
   import {
     CATEGORY_ICONS,
     buildSections,
+    getCategoryPlaceholder,
     hasOnlyFallbackSections,
     splitHighlight,
   } from "$lib/mock-data";
@@ -1011,7 +1012,54 @@
   aria-label="Lux command palette"
 >
   <div class="bar" id="bar" data-tauri-drag-region>
-    {#if isIdle}
+    {#if activeFilter === "apps"}
+      <svg
+        class="search-icon"
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <rect x="3" y="3" width="18" height="18" rx="4" />
+        <path d="M3 9h18M9 21V9" />
+      </svg>
+    {:else if activeFilter === "files"}
+      <svg
+        class="search-icon"
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+    {:else if activeFilter === "actions"}
+      <svg
+        class="search-icon"
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+      </svg>
+    {:else if isIdle}
       <div class="logo bar-logo" aria-label="Lux">
         <svg viewBox="0 0 64 64" width="14" height="14" fill="currentColor">
           <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
@@ -1048,7 +1096,7 @@
       oninput={handleQueryInput}
       autocomplete="off"
       spellcheck="false"
-      placeholder="Search Anything…"
+      placeholder={getCategoryPlaceholder(activeFilter)}
       aria-label="Search"
     />
     <div class="spin" aria-hidden="true"></div>

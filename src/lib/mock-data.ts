@@ -385,6 +385,20 @@ export function scoreItem(item: LauncherItem, loweredQuery: string): number {
 
 export type SearchFilter = "all" | "apps" | "files" | "actions";
 
+export function getCategoryPlaceholder(filter: SearchFilter): string {
+  switch (filter) {
+    case "apps":
+      return "Search Applications…";
+    case "files":
+      return "Search Files…";
+    case "actions":
+      return "Search Actions…";
+    case "all":
+    default:
+      return "Search Anything…";
+  }
+}
+
 export function buildSections(
   rawQuery: string,
   searchResponse?: SearchResponse,

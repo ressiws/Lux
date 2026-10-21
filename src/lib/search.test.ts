@@ -1,5 +1,6 @@
 import {
   buildSections,
+  getCategoryPlaceholder,
   hasOnlyFallbackSections,
   mapBackendApp,
   mapBackendFile,
@@ -240,6 +241,14 @@ export function runSearchIntegrationTests(): number {
     assertEqual(sections.length, 1, "Actions section present");
     assertEqual(sections[0].category, "cmd", "Actions category");
     assertEqual(sections[0].items.length > 0, true, "Available actions populated");
+  });
+
+  // 13. Test dynamic category placeholders
+  check(() => {
+    assertEqual(getCategoryPlaceholder("all"), "Search Anything…", "Default category placeholder");
+    assertEqual(getCategoryPlaceholder("apps"), "Search Applications…", "Apps category placeholder");
+    assertEqual(getCategoryPlaceholder("files"), "Search Files…", "Files category placeholder");
+    assertEqual(getCategoryPlaceholder("actions"), "Search Actions…", "Actions category placeholder");
   });
 
   return passed;
