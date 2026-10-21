@@ -1650,11 +1650,21 @@ pub fn browse_index(
 ) -> (Vec<SearchResultItem>, Vec<SearchResultItem>) {
     match category {
         "apps" => {
-            let apps = index.apps.iter().map(build_app_search_result).collect();
+            let mut apps: Vec<SearchResultItem> =
+                index.apps.iter().map(build_app_search_result).collect();
+            apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
             (apps, Vec::new())
         }
         "files" => {
-            let files = index.files.iter().map(build_file_search_result).collect();
+            let mut files: Vec<SearchResultItem> =
+                index.files.iter().map(build_file_search_result).collect();
+            files.sort_by(|a, b| {
+                let a_is_folder = a.right_label == "Folder";
+                let b_is_folder = b.right_label == "Folder";
+                b_is_folder
+                    .cmp(&a_is_folder)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
             (Vec::new(), files)
         }
         _ => (Vec::new(), Vec::new()),

@@ -405,6 +405,7 @@ export interface BuildSectionsOptions {
   filter?: SearchFilter;
   subcategory?: string;
   browseResponse?: SearchResponse;
+  mockItemsForTesting?: readonly LauncherItem[];
 }
 
 export function buildSections(
@@ -417,7 +418,7 @@ export function buildSections(
   const filter = options?.filter ?? "all";
   const subcategory = options?.subcategory ?? "all";
   const enableFileSearch = options?.enableFileSearch ?? true;
-
+  const testItems = options?.mockItemsForTesting;
 
   // 1. Filter: Apps
   if (filter === "apps") {
@@ -425,10 +426,12 @@ export function buildSections(
     if (trimmed) {
       if (searchResponse) {
         apps = searchResponse.apps.map(mapBackendApp);
-      } else {
-        apps = MOCK_ITEMS.filter(
+      } else if (testItems) {
+        apps = testItems.filter(
           (item) => item.category === "app" && scoreItem(item, lowered) > 0,
         );
+      } else {
+        apps = [];
       }
     } else {
       // Browse mode: show all available applications
@@ -436,8 +439,10 @@ export function buildSections(
         apps = searchResponse.apps.map(mapBackendApp);
       } else if (options?.browseResponse && options.browseResponse.apps.length > 0) {
         apps = options.browseResponse.apps.map(mapBackendApp);
+      } else if (testItems) {
+        apps = testItems.filter((item) => item.category === "app");
       } else {
-        apps = MOCK_ITEMS.filter((item) => item.category === "app");
+        apps = [];
       }
     }
 
@@ -466,10 +471,12 @@ export function buildSections(
     if (trimmed) {
       if (searchResponse) {
         files = searchResponse.files.map(mapBackendFile);
-      } else {
-        files = MOCK_ITEMS.filter(
+      } else if (testItems) {
+        files = testItems.filter(
           (item) => item.category === "file" && scoreItem(item, lowered) > 0,
         );
+      } else {
+        files = [];
       }
     } else {
       // Browse mode: show all available files, folders, and images
@@ -477,8 +484,10 @@ export function buildSections(
         files = searchResponse.files.map(mapBackendFile);
       } else if (options?.browseResponse && options.browseResponse.files.length > 0) {
         files = options.browseResponse.files.map(mapBackendFile);
+      } else if (testItems) {
+        files = testItems.filter((item) => item.category === "file");
       } else {
-        files = MOCK_ITEMS.filter((item) => item.category === "file");
+        files = [];
       }
     }
 
@@ -518,19 +527,26 @@ export function buildSections(
       : [];
   }
 
+  // 4. Default / All categories
   const suggestedApps =
     searchResponse && searchResponse.apps.length > 0
       ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
-      : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
-  // 4. Default / All categories
+      : options?.browseResponse && options.browseResponse.apps.length > 0
+        ? options.browseResponse.apps.slice(0, 4).map(mapBackendApp)
+        : testItems
+          ? testItems.filter((item) => SUGGESTED_APP_NAMES.has(item.name))
+          : [];
+
   if (!trimmed) {
-    return [
-      {
-        category: "app",
-        title: "Suggestions",
-        items: suggestedApps,
-      },
-    ];
+    return suggestedApps.length > 0
+      ? [
+          {
+            category: "app",
+            title: "Suggestions",
+            items: suggestedApps,
+          },
+        ]
+      : [];
   }
 
   const sections: LauncherSection[] = [];
@@ -559,8 +575,6 @@ export function buildSections(
     });
   }
 
-
-
   if (searchResponse) {
     if (searchResponse.apps.length > 0) {
       sections.push({
@@ -588,13 +602,13 @@ export function buildSections(
         items: matchingCmds,
       });
     }
-  } else {
+  } else if (testItems) {
     const grouped = new Map<
       ItemCategory,
       Array<{ score: number; item: LauncherItem }>
     >();
 
-    for (const item of MOCK_ITEMS) {
+    for (const item of testItems) {
       if (!enableFileSearch && item.category === "file") {
         continue;
       }
@@ -657,7 +671,6 @@ export function buildSections(
 
   return sections;
 }
-
 export function splitHighlight(text: string, query: string): HighlightParts {
   const trimmed = query.trim();
   if (!trimmed) {
