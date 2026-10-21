@@ -16,6 +16,7 @@
     onSettingsChanged,
     type SettingsState,
   } from "./settings";
+  import { getColorLuminance } from "./color";
 
   interface Props {
     onClose: () => void;
@@ -238,11 +239,12 @@
         },
       });
     } else if (it.kind === "color") {
+      const hexVal = it.colorHex || it.name;
       actions.push({
         label: "Copy HEX",
         shortcut: "Ctrl C",
         action: () => {
-          navigator.clipboard.writeText(it.name);
+          navigator.clipboard.writeText(hexVal);
           say("HEX copied");
         },
       });
@@ -263,6 +265,16 @@
           action: () => {
             navigator.clipboard.writeText(it.colorHsl!);
             say("HSL copied");
+          },
+        });
+      }
+      if (it.name !== hexVal) {
+        actions.push({
+          label: "Copy Original",
+          shortcut: "Ctrl O",
+          action: () => {
+            navigator.clipboard.writeText(it.name);
+            say("Original copied");
           },
         });
       }
@@ -318,7 +330,11 @@
 
   async function copyItem(item: ClipboardEntry): Promise<void> {
     try {
-      await copyClipboardEntry(item.id);
+      if (item.kind === "color" && item.colorHex) {
+        await navigator.clipboard.writeText(item.colorHex);
+      } else {
+        await copyClipboardEntry(item.id);
+      }
       say(
         item.kind === "color"
           ? "HEX copied"
@@ -501,6 +517,26 @@
       }
     }
 
+    // Tertiary copy action for HSL: Ctrl + Shift + H
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && k.toLowerCase() === "h") {
+      if (selectedItem && selectedItem.kind === "color" && selectedItem.colorHsl) {
+        e.preventDefault();
+        void navigator.clipboard.writeText(selectedItem.colorHsl);
+        say("HSL copied");
+        return;
+      }
+    }
+
+    // Copy original string: Ctrl + O
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k.toLowerCase() === "o") {
+      if (selectedItem && selectedItem.kind === "color") {
+        e.preventDefault();
+        void navigator.clipboard.writeText(selectedItem.name);
+        say("Original copied");
+        return;
+      }
+    }
+
     // Toggle actions popover: Ctrl + K or Tab
     if (k === "Tab" || (e.ctrlKey && k.toLowerCase() === "k")) {
       e.preventDefault();
@@ -548,14 +584,7 @@
     return `Search ${found ? found[2].replace("search ", "") : "items"}…`;
   }
 
-  function getColorLuminance(hex: string): number {
-    const clean = hex.replace("#", "");
-    if (clean.length < 6) return 255;
-    const r = parseInt(clean.slice(0, 2), 16);
-    const g = parseInt(clean.slice(2, 4), 16);
-    const b = parseInt(clean.slice(4, 6), 16);
-    return (r * 299 + g * 587 + b * 114) / 1000;
-  }
+
 
   function handleCopy(e: ClipboardEvent): void {
     const isInputActive = document.activeElement === searchInput;
@@ -780,7 +809,9 @@
               onclick={() => void pasteItem(item)}
             >
               {#if item.kind === "color"}
-                <div class="sw" style="background: {item.name}"></div>
+                <div class="sw">
+                  <div class="sw-inner" style="background: {item.colorHex || item.name}"></div>
+                </div>
               {:else if item.kind === "image"}
                 <div
                   class="thumb"
@@ -826,15 +857,29 @@
       {#if selectedItem}
         <div class="pvbox">
           {#if selectedItem.kind === "color"}
-            <div class="fill" style="background: {selectedItem.name}">
-              <span
-                class="hex"
-                style="color: {getColorLuminance(selectedItem.name) > 150
-                  ? '#111'
-                  : '#fff'}"
-              >
-                {selectedItem.name}
-              </span>
+            <div class="color-pvbox">
+              <div class="fill" style="background: {selectedItem.colorHex || selectedItem.name}">
+                <div class="color-badge">
+                  <span
+                    class="hex"
+                    style="color: {getColorLuminance(selectedItem.colorHex || selectedItem.name) > 150
+                      ? '#111'
+                      : '#fff'}"
+                  >
+                    {selectedItem.colorHex || selectedItem.name}
+                  </span>
+                  {#if selectedItem.name !== (selectedItem.colorHex || selectedItem.name)}
+                    <span
+                      class="color-orig"
+                      style="color: {getColorLuminance(selectedItem.colorHex || selectedItem.name) > 150
+                        ? 'rgba(0, 0, 0, 0.7)'
+                        : 'rgba(255, 255, 255, 0.8)'}"
+                    >
+                      {selectedItem.name}
+                    </span>
+                  {/if}
+                </div>
+              </div>
             </div>
           {:else if selectedItem.kind === "image"}
             {#if selectedItem.preview}
@@ -1007,8 +1052,12 @@
             {/if}
           {:else if selectedItem.kind === "color"}
             <div class="pm">
-              <span>HEX</span>
+              <span>Original</span>
               <span>{selectedItem.name}</span>
+            </div>
+            <div class="pm">
+              <span>HEX</span>
+              <span>{selectedItem.colorHex || selectedItem.name}</span>
             </div>
             {#if selectedItem.colorRgb}
               <div class="pm">
@@ -1306,9 +1355,61 @@
     color: var(--mut);
   }
 
-  .thumb,
-  .sw {
+  .thumb {
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+  }
+
+  .sw {
+    position: relative;
+    overflow: hidden;
+    background-image: conic-gradient(
+      rgba(255, 255, 255, 0.15) 0deg 90deg,
+      rgba(0, 0, 0, 0.25) 90deg 180deg,
+      rgba(255, 255, 255, 0.15) 180deg 270deg,
+      rgba(0, 0, 0, 0.25) 270deg 360deg
+    );
+    background-size: 8px 8px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  }
+
+  .sw-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+  }
+
+  .color-pvbox {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    background-image: conic-gradient(
+      rgba(255, 255, 255, 0.15) 0deg 90deg,
+      rgba(0, 0, 0, 0.25) 90deg 180deg,
+      rgba(255, 255, 255, 0.15) 180deg 270deg,
+      rgba(0, 0, 0, 0.25) 270deg 360deg
+    );
+    background-size: 16px 16px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+  }
+
+  .color-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    max-width: 90%;
+  }
+
+  .color-badge .color-orig {
+    font-size: 12px;
+    font-weight: 500;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .txt {

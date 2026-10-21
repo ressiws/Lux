@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod clipboard_filters;
+pub mod color;
 pub mod features;
 pub mod search;
 pub mod shortcuts;

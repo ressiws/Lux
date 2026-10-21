@@ -8,6 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::color;
+
 pub const EVENT_CLIPBOARD_UPDATED: &str = "lux://clipboard-updated";
 pub const DEFAULT_MAX_CLIPBOARD_ENTRIES: usize = 100;
 
@@ -107,63 +109,15 @@ pub fn format_size(bytes: usize) -> String {
 }
 
 pub fn is_hex_color(s: &str) -> bool {
-    let s = s.trim();
-    if !s.starts_with('#') {
-        return false;
-    }
-    let hex_part = &s[1..];
-    (hex_part.len() == 3 || hex_part.len() == 6 || hex_part.len() == 8)
-        && hex_part.chars().all(|c| c.is_ascii_hexdigit())
+    color::parse_hex(s).is_some()
 }
 
 pub fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
-    let clean = hex.trim().strip_prefix('#')?;
-    if clean.len() == 3 {
-        let r = u8::from_str_radix(&clean[0..1].repeat(2), 16).ok()?;
-        let g = u8::from_str_radix(&clean[1..2].repeat(2), 16).ok()?;
-        let b = u8::from_str_radix(&clean[2..3].repeat(2), 16).ok()?;
-        Some((r, g, b))
-    } else if clean.len() >= 6 {
-        let r = u8::from_str_radix(&clean[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&clean[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&clean[4..6], 16).ok()?;
-        Some((r, g, b))
-    } else {
-        None
-    }
+    color::parse_hex(hex).map(|c| (c.r, c.g, c.b))
 }
 
 pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> String {
-    let rf = r as f64 / 255.0;
-    let gf = g as f64 / 255.0;
-    let bf = b as f64 / 255.0;
-
-    let max = rf.max(gf).max(bf);
-    let min = rf.min(gf).min(bf);
-    let l = (max + min) / 2.0;
-    let d = max - min;
-
-    let (h, s) = if d.abs() < 1e-9 {
-        (0.0, 0.0)
-    } else {
-        let s = d / (1.0 - (2.0 * l - 1.0).abs());
-        let mut h = if (max - rf).abs() < 1e-9 {
-            (gf - bf) / d + if gf < bf { 6.0 } else { 0.0 }
-        } else if (max - gf).abs() < 1e-9 {
-            (bf - rf) / d + 2.0
-        } else {
-            (rf - gf) / d + 4.0
-        };
-        h *= 60.0;
-        (h, s)
-    };
-
-    format!(
-        "{}°, {}%, {}%",
-        h.round() as i64,
-        (s * 100.0).round() as i64,
-        (l * 100.0).round() as i64
-    )
+    color::ParsedColor::new(r, g, b, 1.0).to_hsl_string()
 }
 
 pub fn is_url(s: &str) -> bool {
@@ -190,9 +144,20 @@ pub fn extract_domain(url_str: &str) -> Option<String> {
 pub fn classify_text(text: &str) -> (ClipboardKind, String, Option<String>) {
     let trimmed = text.trim();
 
-    if is_hex_color(trimmed) {
-        let upper_hex = format!("#{}", trimmed[1..].to_uppercase());
-        return (ClipboardKind::Color, upper_hex, Some("Hex Color".to_string()));
+    if let Some(c) = color::parse_color(trimmed) {
+        let label = if trimmed.starts_with('#') {
+            "Hex Color"
+        } else if trimmed.to_ascii_lowercase().starts_with("rgb") {
+            "RGB Color"
+        } else {
+            "HSL Color"
+        };
+        let preview = if trimmed.starts_with('#') {
+            c.to_hex()
+        } else {
+            trimmed.to_string()
+        };
+        return (ClipboardKind::Color, preview, Some(label.to_string()));
     }
 
     if is_url(trimmed) {
@@ -298,17 +263,19 @@ impl ClipboardHistory {
         let created_at = current_timestamp_ms();
         let id = format!("clip_{created_at}_{}", self.counter);
 
-        let entry = if is_hex_color(trimmed) {
-            let upper_hex = format!("#{}", trimmed[1..].to_uppercase());
-            let (color_rgb, color_hsl) = if let Some((r, g, b)) = hex_to_rgb(&upper_hex) {
-                (Some(format!("{r}, {g}, {b}")), Some(rgb_to_hsl(r, g, b)))
+        let entry = if let Some(c) = color::parse_color(trimmed) {
+            let hex = c.to_hex();
+            let name = if trimmed.starts_with('#') {
+                hex.clone()
             } else {
-                (None, None)
+                trimmed.to_string()
             };
+            let color_rgb = Some(c.to_rgb_string());
+            let color_hsl = Some(c.to_hsl_string());
             ClipboardEntry {
                 id,
                 kind: ClipboardKind::Color,
-                name: upper_hex.clone(),
+                name,
                 preview: None,
                 source_app: app_source,
                 created_at,
@@ -323,7 +290,7 @@ impl ClipboardHistory {
                 file_type: None,
                 image_dims: None,
                 image_size: None,
-                color_hex: Some(upper_hex),
+                color_hex: Some(hex),
                 color_rgb,
                 color_hsl,
                 is_filtered,
@@ -880,6 +847,70 @@ mod tests {
 
         let (kind3, _, _) = classify_text("not a color");
         assert_eq!(kind3, ClipboardKind::Text);
+    }
+
+    #[test]
+    fn test_classify_rgb_and_hsl_colors() {
+        let (k1, prev1, det1) = classify_text("rgb(255, 87, 51)");
+        assert_eq!(k1, ClipboardKind::Color);
+        assert_eq!(prev1, "rgb(255, 87, 51)");
+        assert_eq!(det1, Some("RGB Color".to_string()));
+
+        let (k2, prev2, det2) = classify_text("rgba(255, 87, 51, 0.5)");
+        assert_eq!(k2, ClipboardKind::Color);
+        assert_eq!(prev2, "rgba(255, 87, 51, 0.5)");
+        assert_eq!(det2, Some("RGB Color".to_string()));
+
+        let (k3, prev3, det3) = classify_text("hsl(14, 100%, 60%)");
+        assert_eq!(k3, ClipboardKind::Color);
+        assert_eq!(prev3, "hsl(14, 100%, 60%)");
+        assert_eq!(det3, Some("HSL Color".to_string()));
+
+        let (k4, prev4, det4) = classify_text("hsla(14, 100%, 60%, 0.8)");
+        assert_eq!(k4, ClipboardKind::Color);
+        assert_eq!(prev4, "hsla(14, 100%, 60%, 0.8)");
+        assert_eq!(det4, Some("HSL Color".to_string()));
+
+        // Out of range or malformed must NOT be classified as color
+        let (k5, _, _) = classify_text("rgb(300, 0, 0)");
+        assert_eq!(k5, ClipboardKind::Text);
+
+        let (k6, _, _) = classify_text("const c = rgb(255, 0, 0);");
+        assert_eq!(k6, ClipboardKind::Text);
+    }
+
+    #[test]
+    fn test_rgb_and_hsl_entry_metadata() {
+        let mut history = ClipboardHistory::new(10);
+        let entry_rgb = history
+            .add_text("rgb(255, 87, 51)".to_string(), Some("Terminal".to_string()))
+            .expect("Should create rgb entry");
+
+        assert_eq!(entry_rgb.kind, ClipboardKind::Color);
+        assert_eq!(entry_rgb.name, "rgb(255, 87, 51)");
+        assert_eq!(entry_rgb.color_hex, Some("#FF5733".to_string()));
+        assert_eq!(entry_rgb.color_rgb, Some("255, 87, 51".to_string()));
+        assert_eq!(entry_rgb.color_hsl, Some("11°, 100%, 60%".to_string()));
+
+        let entry_hsl = history
+            .add_text("hsl(14, 100%, 60%)".to_string(), Some("Terminal".to_string()))
+            .expect("Should create hsl entry");
+
+        assert_eq!(entry_hsl.kind, ClipboardKind::Color);
+        assert_eq!(entry_hsl.name, "hsl(14, 100%, 60%)");
+        assert_eq!(entry_hsl.color_hex, Some("#FF6333".to_string()));
+        assert_eq!(entry_hsl.color_rgb, Some("255, 99, 51".to_string()));
+        assert_eq!(entry_hsl.color_hsl, Some("14°, 100%, 60%".to_string()));
+
+        let entry_alpha = history
+            .add_text("rgba(255, 87, 51, 0.5)".to_string(), Some("Terminal".to_string()))
+            .expect("Should create alpha entry");
+
+        assert_eq!(entry_alpha.kind, ClipboardKind::Color);
+        assert_eq!(entry_alpha.name, "rgba(255, 87, 51, 0.5)");
+        assert_eq!(entry_alpha.color_hex, Some("#FF573380".to_string()));
+        assert_eq!(entry_alpha.color_rgb, Some("255, 87, 51, 0.5".to_string()));
+        assert_eq!(entry_alpha.color_hsl, Some("11°, 100%, 60%, 0.5".to_string()));
     }
 
     #[test]
