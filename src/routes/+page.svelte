@@ -31,6 +31,7 @@
   import SettingsView from "$lib/SettingsView.svelte";
   import {
     applyThemeAndCaret,
+    getIdleLauncherHeight,
     loadSettings,
     onSettingsChanged,
     type SettingsState,
@@ -121,11 +122,19 @@
 
   const shouldExpand = $derived(!isIdle);
 
+  const currentIdleHeight = $derived(
+    getIdleLauncherHeight(settings.informationDensity, settings.layoutDensity),
+  );
+
+  let lastSyncedHeight: number | undefined;
+
   async function syncWindowHeight(expanded: boolean): Promise<void> {
-    if (windowExpanded === expanded) return;
+    const targetHeight = expanded ? 500 : currentIdleHeight;
+    if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
     windowExpanded = expanded;
+    lastSyncedHeight = targetHeight;
     try {
-      await setLauncherHeight(expanded);
+      await setLauncherHeight(expanded, currentIdleHeight);
     } catch {
       // Ignore if outside Tauri
     }
@@ -783,7 +792,11 @@
     applyThemeAndCaret(settings);
     focusSearchInput();
     void performSearch("");
-    void notifyFrontendReady().catch(() => {});
+    const idleH = getIdleLauncherHeight(
+      settings.informationDensity,
+      settings.layoutDensity,
+    );
+    void notifyFrontendReady(idleH).catch(() => {});
 
     void getIndexStats()
       .then((stats) => {
@@ -825,6 +838,9 @@
     void onSettingsChanged((newSettings) => {
       settings = newSettings;
       applyThemeAndCaret(settings);
+      if (appMode === "launcher" && isIdle) {
+        void syncWindowHeight(false);
+      }
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -1554,8 +1570,8 @@
   }
 
   .win.idle {
-    height: 144px;
-    max-height: 144px;
+    height: 100%;
+    max-height: 100%;
     flex: none;
     overflow: hidden;
   }
@@ -2266,6 +2282,12 @@
     justify-content: center;
   }
 
+  :global(:root[data-info-density="minimal"]) .win.idle .bar {
+    height: 100%;
+    flex: 1;
+    border-bottom: 0;
+  }
+
   :global(:root[data-info-density="minimal"]) .win.idle .hints {
     display: none !important;
   }
@@ -2409,7 +2431,7 @@
 
   /* Layout Density: Comfortable */
   :global(:root[data-layout-density="comfortable"]) .bar {
-    height: 72px;
+    height: 76px;
     padding: 0 24px;
     gap: 14px;
   }

@@ -3,6 +3,7 @@ import {
   loadSettings,
   saveSettings,
   applyThemeAndCaret,
+  getIdleLauncherHeight,
   SETTINGS_STORAGE_KEY,
   type SettingsState,
 } from "./settings";
@@ -139,6 +140,41 @@ console.log("Running Settings and Density unit tests...");
   assertEqual(mockDataset.layoutDensity, "comfortable", "layoutDensity dataset");
   assertEqual(mockDataset.style, undefined, "legacy style dataset removed");
   assertEqual(mockStyleProps["--caret-color"], "var(--fg)", "caret visible");
+}
+
+// 8. Idle launcher height calculation across all 9 density combinations
+{
+  // Minimal: truly compact search bar heights
+  assertEqual(getIdleLauncherHeight("minimal", "compact"), 54, "minimal + compact idle height");
+  assertEqual(getIdleLauncherHeight("minimal", "normal"), 68, "minimal + normal idle height");
+  assertEqual(getIdleLauncherHeight("minimal", "comfortable"), 76, "minimal + comfortable idle height");
+
+  // Normal: balanced hints layouts
+  assertEqual(getIdleLauncherHeight("normal", "compact"), 124, "normal + compact idle height");
+  assertEqual(getIdleLauncherHeight("normal", "normal"), 144, "normal + normal idle height");
+  assertEqual(getIdleLauncherHeight("normal", "comfortable"), 164, "normal + comfortable idle height");
+
+  // Detailed: rich guidance layouts
+  assertEqual(getIdleLauncherHeight("detailed", "compact"), 132, "detailed + compact idle height");
+  assertEqual(getIdleLauncherHeight("detailed", "normal"), 152, "detailed + normal idle height");
+  assertEqual(getIdleLauncherHeight("detailed", "comfortable"), 172, "detailed + comfortable idle height");
+
+  // Verify minimal is strictly more compact than normal/detailed for every layout density
+  assertEqual(
+    getIdleLauncherHeight("minimal", "compact") < getIdleLauncherHeight("normal", "compact"),
+    true,
+    "minimal compact is smaller than normal compact",
+  );
+  assertEqual(
+    getIdleLauncherHeight("minimal", "normal") < getIdleLauncherHeight("normal", "normal"),
+    true,
+    "minimal normal is smaller than normal normal",
+  );
+  assertEqual(
+    getIdleLauncherHeight("minimal", "comfortable") < getIdleLauncherHeight("normal", "comfortable"),
+    true,
+    "minimal comfortable is smaller than normal comfortable",
+  );
 }
 
 console.log("Settings and Density unit tests passed successfully.");

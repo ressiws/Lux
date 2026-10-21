@@ -106,3 +106,41 @@ export async function onSettingsChanged(
     handler(event.payload);
   });
 }
+
+export function getIdleLauncherHeight(
+  infoDensity: InformationDensity,
+  layoutDensity: LayoutDensity,
+): number {
+  if (infoDensity === "minimal") {
+    switch (layoutDensity) {
+      case "compact":
+        return 54;
+      case "comfortable":
+        return 76;
+      case "normal":
+      default:
+        return 68;
+    }
+  } else if (infoDensity === "detailed") {
+    switch (layoutDensity) {
+      case "compact":
+        return 132;
+      case "comfortable":
+        return 172;
+      case "normal":
+      default:
+        return 152;
+    }
+  } else {
+    // normal info density
+    switch (layoutDensity) {
+      case "compact":
+        return 124;
+      case "comfortable":
+        return 164;
+      case "normal":
+      default:
+        return 144;
+    }
+  }
+}

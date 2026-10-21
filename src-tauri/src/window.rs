@@ -53,6 +53,7 @@ pub struct LauncherState {
     settings_shown_at: Mutex<Option<Instant>>,
     settings_has_gained_focus: AtomicBool,
     saved_position: Mutex<Option<PersistentPosition>>,
+    idle_height: Mutex<f64>,
 }
 
 impl LauncherState {
@@ -73,6 +74,17 @@ impl LauncherState {
             settings_shown_at: Mutex::new(None),
             settings_has_gained_focus: AtomicBool::new(false),
             saved_position: Mutex::new(saved_position),
+            idle_height: Mutex::new(LAUNCHER_HEIGHT_IDLE),
+        }
+    }
+
+    pub fn idle_height(&self) -> f64 {
+        *self.idle_height.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn set_idle_height(&self, height: f64) {
+        if height > 0.0 {
+            *self.idle_height.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = height;
         }
     }
 
@@ -604,7 +616,9 @@ pub fn set_launcher_height<R: Runtime>(app: &AppHandle<R>, expanded: bool) -> Re
     let target_height = if expanded {
         LAUNCHER_HEIGHT_EXPANDED
     } else {
-        LAUNCHER_HEIGHT_IDLE
+        app.try_state::<LauncherState>()
+            .map(|s| s.idle_height())
+            .unwrap_or(LAUNCHER_HEIGHT_IDLE)
     };
     set_window_target_height(app, target_height)
 }
@@ -778,7 +792,10 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 
     let target_height = match mode {
         WindowMode::Clipboard => CLIPBOARD_HEIGHT,
-        WindowMode::Launcher => LAUNCHER_HEIGHT_IDLE,
+        WindowMode::Launcher => app
+            .try_state::<LauncherState>()
+            .map(|s| s.idle_height())
+            .unwrap_or(LAUNCHER_HEIGHT_IDLE),
     };
 
     position_on_active_monitor(&window, target_height);
@@ -1106,8 +1123,9 @@ mod tests {
         let work_size = PhysicalSize::new(2560, 1400);
         let screen_center_y = work_pos.y + (work_size.height as i32 / 2);
 
-        // Sequence of height transitions: compact idle (144), settings / search (500), clipboard (560), back to idle
-        let heights = [144, 250, 380, 500, 560, 300, 144];
+        // Sequence of height transitions: minimal idle (54, 68, 76), hints idle (124, 144, 164),
+        // search (500), clipboard (560), back to minimal idle (68)
+        let heights = [54, 68, 76, 124, 144, 164, 250, 380, 500, 560, 300, 68];
         for h in heights {
             let size = PhysicalSize::new(760, h);
             let pos = calculate_launcher_position(size, work_pos, work_size);
@@ -1117,6 +1135,35 @@ mod tests {
                 "Height {h} drifted from screen center {screen_center_y}"
             );
         }
+    }
+
+    #[test]
+    fn launcher_state_idle_height_management() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt + Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            false,
+            None,
+        );
+        assert_eq!(state.idle_height(), LAUNCHER_HEIGHT_IDLE);
+
+        state.set_idle_height(68.0);
+        assert_eq!(state.idle_height(), 68.0);
+
+        state.set_idle_height(54.0);
+        assert_eq!(state.idle_height(), 54.0);
+
+        state.set_idle_height(76.0);
+        assert_eq!(state.idle_height(), 76.0);
+
+        // Negative or zero heights should be ignored
+        state.set_idle_height(0.0);
+        assert_eq!(state.idle_height(), 76.0);
+        state.set_idle_height(-10.0);
+        assert_eq!(state.idle_height(), 76.0);
     }
 
     #[test]

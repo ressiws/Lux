@@ -57,8 +57,25 @@ fn reveal_item_in_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_launcher_height(expanded: bool, app: AppHandle) -> Result<(), String> {
+fn set_launcher_height(
+    expanded: bool,
+    idle_height: Option<f64>,
+    app: AppHandle,
+    state: State<'_, LauncherState>,
+) -> Result<(), String> {
+    if let Some(h) = idle_height {
+        state.set_idle_height(h);
+    }
     window::set_launcher_height(&app, expanded)
+}
+
+#[tauri::command]
+fn set_launcher_idle_height(
+    height: f64,
+    state: State<'_, LauncherState>,
+) -> Result<(), String> {
+    state.set_idle_height(height);
+    Ok(())
 }
 
 #[tauri::command]
@@ -106,7 +123,14 @@ fn hide_settings(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn notify_frontend_ready(app: AppHandle, state: State<'_, LauncherState>) -> Result<(), String> {
+fn notify_frontend_ready(
+    app: AppHandle,
+    state: State<'_, LauncherState>,
+    idle_height: Option<f64>,
+) -> Result<(), String> {
+    if let Some(h) = idle_height {
+        state.set_idle_height(h);
+    }
     state.mark_frontend_ready();
     if state.should_show_on_ready() {
         state.set_show_on_ready(false);
@@ -138,6 +162,7 @@ pub fn run() {
             open_target_as_admin,
             reveal_item_in_folder,
             set_launcher_height,
+            set_launcher_idle_height,
             set_window_height,
             set_native_glass,
             reindex,

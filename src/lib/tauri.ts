@@ -30,8 +30,15 @@ export async function revealItemInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_item_in_folder", { path });
 }
 
-export async function setLauncherHeight(expanded: boolean): Promise<void> {
-  return invoke<void>("set_launcher_height", { expanded });
+export async function setLauncherHeight(
+  expanded: boolean,
+  idleHeight?: number,
+): Promise<void> {
+  return invoke<void>("set_launcher_height", { expanded, idleHeight });
+}
+
+export async function setLauncherIdleHeight(height: number): Promise<void> {
+  return invoke<void>("set_launcher_idle_height", { height });
 }
 
 export async function setNativeGlass(enable: boolean): Promise<void> {
@@ -169,8 +176,8 @@ export async function updateShortcuts(
   });
 }
 
-export async function notifyFrontendReady(): Promise<void> {
-  return invoke<void>("notify_frontend_ready");
+export async function notifyFrontendReady(idleHeight?: number): Promise<void> {
+  return invoke<void>("notify_frontend_ready", { idleHeight });
 }
 
 export async function getFeaturesConfig(): Promise<import("./types").FeaturesConfig> {
