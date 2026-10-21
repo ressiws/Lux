@@ -2903,8 +2903,9 @@
   }
 
   .clipboard-win {
-    height: 560px;
-    max-height: 560px;
+    height: 100%;
+    max-height: 100%;
+    flex: 1;
   }
 
   /* Information Density: Minimal */

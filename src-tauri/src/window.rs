@@ -486,8 +486,11 @@ pub const SETTINGS_WIDTH: f64 = 480.0;
 pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ANIMATION_TARGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn cancel_resize_animation() {
     RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    ANIMATION_TARGET.store(0, Ordering::SeqCst);
     IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
 }
 
@@ -556,6 +559,11 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         return Ok(());
     }
 
+    let packed_target = ((target_physical_width as u64) << 32) | (target_physical_height as u64);
+    if ANIMATION_TARGET.load(Ordering::SeqCst) == packed_target {
+        return Ok(());
+    }
+
     let saved_pos = app
         .try_state::<LauncherState>()
         .and_then(|s| s.saved_position());
@@ -564,6 +572,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
 
     // When the window is hidden, snap immediately without animation
     if !window.is_visible().unwrap_or(false) {
+        ANIMATION_TARGET.store(0, Ordering::SeqCst);
         if let Some((work_pos, work_size)) = work_area {
             let target_physical_size = PhysicalSize::new(target_physical_width, target_physical_height);
             let target_pos = calculate_window_position(target_physical_size, work_pos, work_size, saved_pos);
@@ -595,6 +604,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
     }
 
     let generation = RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    ANIMATION_TARGET.store(packed_target, Ordering::SeqCst);
     let window_clone = window.clone();
     let start_h = current_physical.height as f64;
     let end_h = target_physical_height as f64;
@@ -606,6 +616,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         struct MovingGuard;
         impl Drop for MovingGuard {
             fn drop(&mut self) {
+                ANIMATION_TARGET.store(0, Ordering::SeqCst);
                 IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
             }
         }
@@ -874,17 +885,13 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .map(|s| s.mode())
         .unwrap_or(WindowMode::Launcher);
 
-    let (target_width, target_height) = match mode {
-        WindowMode::Clipboard => (CLIPBOARD_WIDTH, CLIPBOARD_HEIGHT),
-        WindowMode::Launcher => (
-            LAUNCHER_WIDTH,
-            app.try_state::<LauncherState>()
-                .map(|s| s.idle_height())
-                .unwrap_or(LAUNCHER_HEIGHT_IDLE),
-        ),
-    };
+    let idle_h = app
+        .try_state::<LauncherState>()
+        .map(|s| s.idle_height())
+        .unwrap_or(LAUNCHER_HEIGHT_IDLE);
 
-    position_window_centered(&window, target_width, target_height);
+    // Always position and show the window from its compact state
+    position_window_centered(&window, LAUNCHER_WIDTH, idle_h);
 
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
@@ -912,6 +919,10 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 
     if let Err(err) = window.emit(EVENT_LAUNCHER_SHOWN, ()) {
         eprintln!("Warning: failed to emit launcher-shown event: {err}");
+    }
+
+    if mode == WindowMode::Clipboard {
+        let _ = set_window_target_height(app, CLIPBOARD_HEIGHT);
     }
 
     Ok(())
@@ -1511,5 +1522,39 @@ mod tests {
     fn test_target_window_width_for_modes() {
         assert_eq!(target_window_width(WindowMode::Launcher), 640.0);
         assert_eq!(target_window_width(WindowMode::Clipboard), 760.0);
+    }
+    #[test]
+    fn test_compact_and_clipboard_share_horizontal_and_vertical_center() {
+        let work_pos = PhysicalPosition::new(0, 0);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let compact_size = PhysicalSize::new(640, 96);
+        let clipboard_size = PhysicalSize::new(760, 560);
+
+        let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
+        let clipboard_pos = calculate_launcher_position(clipboard_size, work_pos, work_size);
+
+        let compact_center_x = compact_pos.x + (640 / 2);
+        let clipboard_center_x = clipboard_pos.x + (760 / 2);
+        let compact_center_y = compact_pos.y + (96 / 2);
+        let clipboard_center_y = clipboard_pos.y + (560 / 2);
+
+        assert_eq!(compact_center_x, 1920 / 2);
+        assert_eq!(clipboard_center_x, 1920 / 2);
+        assert_eq!(compact_center_x, clipboard_center_x);
+
+        assert_eq!(compact_center_y, 1080 / 2);
+        assert_eq!(clipboard_center_y, 1080 / 2);
+        assert_eq!(compact_center_y, clipboard_center_y);
+    }
+
+    #[test]
+    fn test_animation_target_cancellation() {
+        let target = ((760u64) << 32) | 560u64;
+        ANIMATION_TARGET.store(target, Ordering::SeqCst);
+        assert_eq!(ANIMATION_TARGET.load(Ordering::SeqCst), target);
+
+        cancel_resize_animation();
+        assert_eq!(ANIMATION_TARGET.load(Ordering::SeqCst), 0);
     }
 }
