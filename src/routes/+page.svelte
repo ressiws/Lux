@@ -1599,7 +1599,11 @@
                 </div>
                 <div class="b">
                   <small>{item.calc.label}</small>
-                  <div class="v">{item.calc.value}</div>
+                  <div class="v">
+                    {#if item.calc.colorPreview}
+                      <span class="color-preview-chip" style:background-color={item.calc.colorPreview} aria-hidden="true"></span>
+                    {/if}{item.calc.value}
+                  </div>
                 </div>
               </div>
             {:else}
@@ -2599,6 +2603,17 @@
     color: var(--dim);
     font-size: 11.5px;
     margin-bottom: 3px;
+  }
+
+  .color-preview-chip {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    margin-right: 8px;
+    vertical-align: middle;
+    border: 1px solid var(--line);
+    flex-shrink: 0;
   }
 
   .calc .v {

@@ -2,6 +2,14 @@ import {
   evaluateMathExpression,
   formatCalculatorNumber,
   matchCurrencyConversion,
+  matchTimeZoneConversion,
+  matchDateDuration,
+  matchUnitConversion,
+  matchPracticalCalculation,
+  matchColorConversion,
+  matchPasswordGeneration,
+  setCurrencyCacheForTesting,
+  getCurrencyCache,
 } from "./calculator";
 import { buildSections } from "./mock-data";
 
@@ -49,7 +57,7 @@ export function runCalculatorTests(): number {
   check(() => assertCalcValue("17 % 5", "2"));
   check(() => assertCalcValue("2 ^ 8", "256"));
   check(() => assertCalcValue("2 ** 10", "1024"));
-  check(() => assertCalcValue("2 ^ 3 ^ 2", "512")); // right-associative: 2^(3^2) = 512
+  check(() => assertCalcValue("2 ^ 3 ^ 2", "512"));
 
   // 2. Unicode operators and trailing equals
   check(() => assertCalcValue("12 × 3", "36"));
@@ -96,7 +104,7 @@ export function runCalculatorTests(): number {
   check(() => assertCalcValue("2pi", "6.28318531"));
   check(() => assertCalcValue("3sqrt(16)", "12"));
 
-  // 6. Currency conversions
+  // 6. Currency conversions and caching
   check(() => {
     const conv = matchCurrencyConversion("25 EUR to USD");
     if (!conv) {
@@ -105,6 +113,7 @@ export function runCalculatorTests(): number {
     assertEqual(conv.value, "$27.00", "Currency formatted value");
     assertEqual(conv.raw, "27.00", "Currency raw value");
     assertEqual(conv.expression, "25 EUR", "Currency expression");
+    assertEqual(conv.categoryLabel, "Currency", "Currency category label");
   });
   check(() => {
     const conv = evaluateMathExpression("10,5 eur in usd");
@@ -113,8 +122,219 @@ export function runCalculatorTests(): number {
     }
     assertEqual(conv.raw, "11.34", "Comma decimal currency raw value");
   });
+  check(() => {
+    // Testing stale currency notice and custom cache
+    const testCache = {
+      rates: { USD: 1, EUR: 0.9, JPY: 150 },
+      lastUpdated: "2026-10-18T00:00:00Z",
+      timestamp: Date.now() - 72 * 3600 * 1000, // 3 days ago (stale)
+      provider: "open.er-api.com (ECB)",
+    };
+    setCurrencyCacheForTesting(testCache);
+    const conv = matchCurrencyConversion("100 EUR to USD");
+    if (!conv) throw new Error("Expected conversion with test cache");
+    assertEqual(conv.raw, "111.11", "Custom cache conversion");
+    if (!conv.label.includes("cached")) {
+      throw new Error("Expected stale cached note in currency label");
+    }
+    // Restore default cache
+    setCurrencyCacheForTesting({
+      rates: { USD: 1, EUR: 0.926, GBP: 0.79, BRL: 5.05, JPY: 151.2 },
+      lastUpdated: "2026-10-21",
+      timestamp: Date.now(),
+      provider: "open.er-api.com (ECB)",
+    });
+  });
 
-  // 7. Plain numbers, constants alone, and non-math queries should return null
+  // 7. Time zones and time conversion
+  check(() => {
+    const res = matchTimeZoneConversion("time in Tokyo");
+    if (!res) throw new Error("Expected time in Tokyo");
+    assertEqual(res.categoryLabel, "Time Zone", "Time zone category label");
+    if (!res.expression.includes("Tokyo")) throw new Error("Expression should mention Tokyo");
+  });
+  check(() => {
+    const res = matchTimeZoneConversion("time difference Lisbon London");
+    if (!res) throw new Error("Expected time difference Lisbon London");
+    assertEqual(res.categoryLabel, "Time Zone", "Time zone difference category");
+  });
+  check(() => {
+    const res = matchTimeZoneConversion("9:30 Lisbon to New York");
+    if (!res) throw new Error("Expected conversion for '9:30 Lisbon to New York'");
+    assertEqual(res.categoryLabel, "Time Zone", "Time conversion category");
+    if (!res.value.includes("AM") && !res.value.includes("PM")) {
+      throw new Error("Expected formatted time result");
+    }
+  });
+  check(() => {
+    // Midnight crossing test: 11 PM London to Tokyo (Tokyo is +8/9 hours ahead) -> next day (+1 day)
+    const res = matchTimeZoneConversion("11 PM London to Tokyo");
+    if (!res) throw new Error("Expected conversion for '11 PM London to Tokyo'");
+    if (!res.value.includes("(+1 day)")) {
+      throw new Error(`Expected midnight crossing note (+1 day), got: ${res.value}`);
+    }
+  });
+  check(() => {
+    const res = evaluateMathExpression("10 PM here to London");
+    if (!res) throw new Error("Expected '10 PM here to London' via evaluateMathExpression");
+    assertEqual(res.categoryLabel, "Time Zone", "Time zone category");
+  });
+
+  // 8. Dates and durations
+  check(() => {
+    const ref = new Date(2026, 9, 21); // 21 Oct 2026
+    const res = matchDateDuration("90 days from today", ref);
+    if (!res) throw new Error("Expected 90 days from today");
+    assertEqual(res.categoryLabel, "Date", "Date category");
+    if (!res.value.includes("19") || !res.value.includes("January")) {
+      throw new Error(`Expected January 19 2027, got: ${res.value}`);
+    }
+  });
+  check(() => {
+    const ref = new Date(2026, 9, 21); // 21 Oct 2026
+    const res = matchDateDuration("days until Christmas", ref);
+    if (!res) throw new Error("Expected days until Christmas");
+    assertEqual(res.value, "65 days", "Days until Christmas from 21 Oct");
+  });
+  check(() => {
+    const ref = new Date(2026, 9, 21);
+    const res = matchDateDuration("days between 12 Oct and 21 Oct", ref);
+    if (!res) throw new Error("Expected days between 12 Oct and 21 Oct");
+    assertEqual(res.value, "9 days", "Calendar days between 12 Oct and 21 Oct");
+  });
+  check(() => {
+    // Leap year boundary: 2028 is a leap year (Feb has 29 days)
+    const ref = new Date(2028, 1, 28); // 28 Feb 2028
+    const res = matchDateDuration("1 days from today", ref);
+    if (!res) throw new Error("Expected leap year day addition");
+    if (!res.value.includes("29") || !res.value.includes("February")) {
+      throw new Error(`Expected Feb 29 2028, got: ${res.value}`);
+    }
+  });
+
+  // 9. Unit conversions
+  check(() => {
+    // Distance
+    const res = matchUnitConversion("100 km to miles");
+    if (!res) throw new Error("Expected 100 km to miles");
+    assertEqual(res.value, "62.137119 miles", "100 km in miles");
+    assertEqual(res.categoryLabel, "Unit", "Unit category");
+  });
+  check(() => {
+    // Temperature: Celsius to Fahrenheit and Kelvin
+    const resF = matchUnitConversion("100 C to F");
+    if (!resF) throw new Error("Expected 100 C to F");
+    assertEqual(resF.value, "212 °F", "100 C in F");
+
+    const resK = matchUnitConversion("0 C to K");
+    if (!resK) throw new Error("Expected 0 C to K");
+    assertEqual(resK.value, "273.15 K", "0 C in K");
+  });
+  check(() => {
+    // Weight
+    const res = matchUnitConversion("50 kg to lbs");
+    if (!res) throw new Error("Expected 50 kg to lbs");
+    assertEqual(res.value, "110.231131 lbs", "50 kg in lbs");
+  });
+  check(() => {
+    // Digital storage: verify distinction between Decimal SI (GB) and Binary IEC (GiB)
+    const resSiToIec = matchUnitConversion("1 GB to GiB");
+    if (!resSiToIec) throw new Error("Expected 1 GB to GiB");
+    assertEqual(resSiToIec.value, "0.931323 GiB", "1 GB to GiB");
+
+    const resIecToSi = matchUnitConversion("1 GiB to MB");
+    if (!resIecToSi) throw new Error("Expected 1 GiB to MB");
+    assertEqual(resIecToSi.value, "1,073.741824 MB", "1 GiB to MB");
+  });
+
+  // 10. Practical calculations
+  check(() => {
+    // Percentage
+    const res = matchPracticalCalculation("15% of 240");
+    if (!res) throw new Error("Expected 15% of 240");
+    assertEqual(res.value, "36", "15% of 240");
+  });
+  check(() => {
+    // VAT addition
+    const res = matchPracticalCalculation("VAT 23% on 100");
+    if (!res) throw new Error("Expected VAT 23% on 100");
+    assertEqual(res.value, "123.00", "Total with 23% VAT on 100");
+    assertEqual(res.categoryLabel, "Tax", "Tax category");
+  });
+  check(() => {
+    // VAT removal / extraction
+    const res = matchPracticalCalculation("remove 23% VAT from 123");
+    if (!res) throw new Error("Expected remove 23% VAT from 123");
+    assertEqual(res.value, "100.00", "Net after removing 23% VAT from 123");
+    assertEqual(res.categoryLabel, "Tax", "Tax category");
+  });
+  check(() => {
+    // Bill split
+    const res = matchPracticalCalculation("split 87.50 between 4");
+    if (!res) throw new Error("Expected split 87.50 between 4");
+    assertEqual(res.value, "21.88 each", "Split 87.50 between 4");
+    assertEqual(res.raw, "21.88", "Raw split amount");
+  });
+
+  // 11. Color conversions
+  check(() => {
+    // Hex to RGB and HSL
+    const res = matchColorConversion("#798F78 to RGB");
+    if (!res) throw new Error("Expected #798F78 to RGB");
+    assertEqual(res.value, "rgb(121, 143, 120)", "Hex to RGB value");
+    assertEqual(res.colorPreview, "#798f78", "Color preview hex");
+    assertEqual(res.categoryLabel, "Color", "Color category");
+  });
+  check(() => {
+    const res = matchColorConversion("#798F78 to HSL");
+    if (!res) throw new Error("Expected #798F78 to HSL");
+    assertEqual(res.value, "hsl(117, 9%, 52%)", "Hex to HSL value");
+  });
+  check(() => {
+    // RGB to HEX
+    const res = matchColorConversion("rgb(121, 143, 120) to HEX");
+    if (!res) throw new Error("Expected rgb(121, 143, 120) to HEX");
+    assertEqual(res.value, "#798f78", "RGB to HEX value");
+  });
+  check(() => {
+    // HSL to HEX
+    const res = matchColorConversion("hsl(117, 9%, 52%) to HEX");
+    if (!res) throw new Error("Expected hsl(117, 9%, 52%) to HEX");
+    assertEqual(res.value, "#7b907a", "HSL to HEX value");
+  });
+  check(() => {
+    // Invalid color out of range
+    const res = matchColorConversion("rgb(300, 10, 10)");
+    if (res !== null) throw new Error("Expected null for out of range RGB");
+  });
+
+  // 12. Secure password generation
+  check(() => {
+    const res = matchPasswordGeneration("generate password 24");
+    if (!res) throw new Error("Expected generate password 24");
+    assertEqual(res.value.length, 24, "Generated password length 24");
+    assertEqual(res.categoryLabel, "Password", "Password category");
+  });
+  check(() => {
+    const res = matchPasswordGeneration("generate password");
+    if (!res) throw new Error("Expected default generate password");
+    assertEqual(res.value.length, 16, "Default password length 16");
+  });
+  check(() => {
+    // Bounds: < 8 or > 128
+    const resShort = matchPasswordGeneration("generate password 4");
+    if (!resShort || !resShort.value.includes("between 8 and 128")) {
+      throw new Error("Expected rejection for password length 4");
+    }
+  });
+  check(() => {
+    // Should NOT trigger for non-generation queries containing "password"
+    assertCalcNull("password manager");
+    assertCalcNull("my password");
+    assertCalcNull("change password");
+  });
+
+  // 13. Plain queries, app names, files should NOT be captured as quick answers
   check(() => assertCalcNull(""));
   check(() => assertCalcNull("   "));
   check(() => assertCalcNull("42"));
@@ -126,8 +346,9 @@ export function runCalculatorTests(): number {
   check(() => assertCalcNull("firefox"));
   check(() => assertCalcNull("wedding-selects-0412.jpg"));
   check(() => assertCalcNull("IMG_4821.jpg"));
+  check(() => assertCalcNull("London"));
 
-  // 8. Incomplete, malformed, and unsafe inputs must return null without throwing
+  // 14. Incomplete, malformed, and unsafe inputs must return null without throwing
   check(() => assertCalcNull("2 +"));
   check(() => assertCalcNull("* 5"));
   check(() => assertCalcNull("(2 + 3"));
@@ -153,13 +374,13 @@ export function runCalculatorTests(): number {
   check(() => assertCalcNull("process.exit(1)"));
   check(() => assertCalcNull("25 ABC to XYZ"));
 
-  // 9. Deep nesting guard (> MAX_PARSE_DEPTH)
+  // 15. Deep nesting guard (> MAX_PARSE_DEPTH)
   check(() => {
     const deeplyNested = "(".repeat(80) + "1 + 1" + ")".repeat(80);
     assertCalcNull(deeplyNested);
   });
 
-  // 10. Section builder integration
+  // 16. Section builder integration
   check(() => {
     const sections = buildSections("(128 * 1.19) / 3");
     assertEqual(sections[0]?.category, "calc", "First section should be calc");
@@ -171,6 +392,19 @@ export function runCalculatorTests(): number {
       "Copy Expression",
       "Calc item secondary action",
     );
+  });
+  check(() => {
+    const sections = buildSections("generate password 24");
+    assertEqual(sections[0]?.category, "calc", "Password section should be calc");
+    const item = sections[0]?.items[0];
+    assertEqual(item?.primaryLabel, "Copy Password", "Password item primary action");
+    assertEqual(item?.rightLabel, "Password", "Password item right label");
+  });
+  check(() => {
+    const sections = buildSections("#798F78 to RGB");
+    const item = sections[0]?.items[0];
+    assertEqual(item?.color, "#798f78", "Color item swatch");
+    assertEqual(item?.rightLabel, "Color", "Color item right label");
   });
 
   check(() => {

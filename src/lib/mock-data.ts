@@ -562,8 +562,12 @@ export function buildSections(
           name: calcPreview.value,
           subtitle: calcPreview.expression,
           keywords: "",
-          rightLabel: "Calculator",
-          primaryLabel: "Copy Result",
+          rightLabel: calcPreview.categoryLabel ?? "Quick Answer",
+          color: calcPreview.colorPreview,
+          primaryLabel:
+            calcPreview.categoryLabel === "Password"
+              ? "Copy Password"
+              : "Copy Result",
           calc: calcPreview,
           actions: [
             { label: "Copy Result", shortcut: "↵" },
