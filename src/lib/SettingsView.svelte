@@ -470,7 +470,7 @@
           <b>Launcher Global Shortcut</b>
           <small class="desc">Show or hide the command launcher</small>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
+        <div class="shortcut-group">
           <input
             class="shortcut-input"
             bind:value={launcherShortcutInput}
@@ -744,7 +744,7 @@
             <b>Clipboard History Shortcut</b>
             <small class="desc">Global hotkey to open clipboard history directly</small>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center;">
+          <div class="shortcut-group">
             <input
               class="shortcut-input"
               bind:value={clipboardShortcutInput}
@@ -915,13 +915,13 @@
             <div class="filter-inputs-row">
               <input
                 type="text"
-                class="filter-text-input"
+                class="filter-text-input filter-name-input"
                 placeholder="Filter Name (optional)"
                 bind:value={customNameInput}
               />
               <input
                 type="text"
-                class="filter-text-input flex-1"
+                class="filter-text-input filter-pattern-input flex-1"
                 placeholder="Pattern (e.g. ^SECRET-.*)"
                 bind:value={customPatternInput}
                 oninput={() => {
@@ -937,7 +937,7 @@
             <div class="filter-test-row">
               <input
                 type="text"
-                class="filter-text-input flex-1"
+                class="filter-text-input filter-test-input flex-1"
                 placeholder="Test string against pattern..."
                 bind:value={testStringInput}
                 oninput={() => {
@@ -1171,10 +1171,16 @@
 </div>
 
 <style>
+  .settings-win,
+  .settings-win * {
+    box-sizing: border-box;
+  }
+
   .settings-win {
     width: 100vw;
     height: 100vh;
-    box-sizing: border-box;
+    max-width: 100%;
+    max-height: 100%;
     background: var(--bg);
     -webkit-backdrop-filter: blur(24px) saturate(1.4);
     backdrop-filter: blur(24px) saturate(1.4);
@@ -1191,12 +1197,13 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
+    padding: 10px 16px;
     font-weight: 600;
     font-size: 13px;
     border-bottom: 1px solid var(--line);
     background: var(--chip);
     flex-shrink: 0;
+    width: 100%;
   }
 
   .stb-title {
@@ -1204,6 +1211,13 @@
     align-items: center;
     gap: 8px;
     color: var(--fg);
+    min-width: 0;
+  }
+
+  .stb-title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .logo {
@@ -1214,6 +1228,7 @@
     color: var(--bg);
     display: grid;
     place-items: center;
+    flex-shrink: 0;
   }
 
   .stb button {
@@ -1225,6 +1240,7 @@
     padding: 4px 8px;
     font-size: 13px;
     line-height: 1;
+    flex-shrink: 0;
     transition: all 0.15s ease;
   }
 
@@ -1235,15 +1251,24 @@
 
   .set-tabs {
     display: flex;
-    gap: 4px;
-    padding: 8px 12px;
+    gap: 3px;
+    padding: 6px 10px;
     background: var(--chip);
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .set-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .set-tabs button {
-    flex: 1;
+    flex: 1 1 0%;
+    min-width: 0;
     border: 0;
     background: none;
     color: var(--mut);
@@ -1252,11 +1277,13 @@
       "Segoe UI",
       system-ui,
       sans-serif;
-    padding: 6px 8px;
+    padding: 6px 6px;
     border-radius: 6px;
     cursor: pointer;
     white-space: nowrap;
     text-align: center;
+    text-overflow: ellipsis;
+    overflow: hidden;
     transition: all 0.15s ease;
   }
 
@@ -1271,24 +1298,35 @@
   }
 
   .set-body {
-    flex: 1;
+    flex: 1 1 0%;
+    min-height: 0;
+    max-height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 12px 16px;
+    padding: 10px 16px;
     scrollbar-width: thin;
+    width: 100%;
+    max-width: 100%;
   }
 
   .srow {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 4px;
+    padding: 11px 4px;
     border-bottom: 1px solid var(--line);
-    gap: 16px;
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
   }
 
   .srow:last-child {
     border-bottom: 0;
+  }
+
+  .srow > div:first-child {
+    flex: 1 1 0%;
+    min-width: 0;
   }
 
   .storage-row {
@@ -1302,6 +1340,8 @@
     font-size: 13px;
     font-weight: 500;
     color: var(--fg);
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
 
   .srow small {
@@ -1309,6 +1349,9 @@
     color: var(--dim);
     font-size: 11.5px;
     margin-top: 2px;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    line-height: 1.35;
   }
 
   .sw {
@@ -1353,21 +1396,24 @@
     padding: 2px;
     gap: 2px;
     flex-shrink: 0;
+    max-width: 100%;
   }
 
   .seg button {
     border: 0;
     background: none;
     font:
-      500 12px Inter,
+      500 11.5px Inter,
       "Segoe UI",
       system-ui,
       sans-serif;
     color: var(--mut);
-    padding: 4px 10px;
+    padding: 4px 8px;
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .seg button:hover {
@@ -1390,10 +1436,11 @@
       "Segoe UI",
       system-ui,
       sans-serif;
-    padding: 6px 12px;
+    padding: 5px 11px;
     border-radius: 6px;
     cursor: pointer;
     flex-shrink: 0;
+    white-space: nowrap;
     transition: all 0.15s ease;
   }
 
@@ -1414,6 +1461,14 @@
     background: rgba(229, 72, 77, 0.12);
   }
 
+  .shortcut-group {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-shrink: 0;
+    max-width: 100%;
+  }
+
   .shortcut-input {
     background: var(--chip);
     border: 1px solid var(--line);
@@ -1421,8 +1476,8 @@
     color: var(--fg);
     font-family: monospace;
     font-size: 12px;
-    padding: 6px 10px;
-    width: 140px;
+    padding: 5px 8px;
+    width: 115px;
     text-align: center;
     outline: none;
     transition: border-color 0.15s;
@@ -1441,6 +1496,9 @@
     border-radius: 6px;
     padding: 8px 10px;
     margin: 8px 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    width: 100%;
   }
 
   .shortcut-status-banner {
@@ -1451,6 +1509,9 @@
     border-radius: 6px;
     padding: 6px 10px;
     margin: 8px 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    width: 100%;
   }
 
   .shortcut-status-banner.error {
@@ -1459,19 +1520,21 @@
     border-color: rgba(229, 72, 77, 0.25);
   }
 
-
   .prefix-container {
     padding: 8px 4px 12px;
     border-bottom: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     gap: 8px;
+    width: 100%;
+    min-width: 0;
   }
 
   .prefix-list {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    width: 100%;
   }
 
   .prefix-tag {
@@ -1485,6 +1548,14 @@
     font-size: 12px;
     color: var(--fg);
     font-family: monospace;
+    max-width: 100%;
+  }
+
+  .prefix-tag span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
   }
 
   .prefix-remove-btn {
@@ -1509,6 +1580,8 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
+    width: 100%;
   }
 
   .prefix-input {
@@ -1520,7 +1593,8 @@
     padding: 6px 10px;
     outline: none;
     transition: border-color 0.15s;
-    width: 160px;
+    width: 150px;
+    max-width: 100%;
   }
 
   .prefix-input:focus {
@@ -1528,11 +1602,13 @@
   }
 
   .filter-section {
-    padding: 12px 4px;
+    padding: 10px 4px;
     border-bottom: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     gap: 10px;
+    width: 100%;
+    min-width: 0;
   }
 
   .filter-section-header b {
@@ -1540,6 +1616,7 @@
     font-size: 13px;
     font-weight: 500;
     color: var(--fg);
+    word-break: break-word;
   }
 
   .filter-section-header small {
@@ -1547,12 +1624,14 @@
     color: var(--dim);
     font-size: 11.5px;
     margin-top: 2px;
+    word-break: break-word;
   }
 
   .custom-filters-list {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    width: 100%;
   }
 
   .custom-filter-item {
@@ -1563,6 +1642,9 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     padding: 6px 10px;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
   }
 
   .custom-filter-info {
@@ -1570,6 +1652,7 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
+    flex: 1 1 0%;
     overflow: hidden;
   }
 
@@ -1577,16 +1660,22 @@
     font-size: 12px;
     font-weight: 500;
     color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 110px;
+    flex-shrink: 0;
   }
 
   .custom-filter-pattern {
     font-family: monospace;
     font-size: 11.5px;
     color: var(--dim);
-    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1 1 0%;
+    min-width: 0;
   }
 
   .custom-filter-badge {
@@ -1596,12 +1685,14 @@
     padding: 1px 5px;
     border-radius: 4px;
     text-transform: uppercase;
+    flex-shrink: 0;
   }
 
   .custom-filter-actions {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .filter-remove-btn {
@@ -1627,6 +1718,8 @@
     border: 1px dashed var(--line);
     border-radius: 6px;
     padding: 10px;
+    width: 100%;
+    min-width: 0;
   }
 
   .filter-inputs-row,
@@ -1634,10 +1727,31 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .filter-inputs-row {
+    flex-wrap: wrap;
   }
 
   .flex-1 {
-    flex: 1;
+    flex: 1 1 0%;
+  }
+
+  .filter-name-input {
+    flex: 1 1 110px;
+    min-width: 0;
+  }
+
+  .filter-pattern-input {
+    flex: 2 1 140px;
+    min-width: 0;
+  }
+
+  .filter-test-input {
+    flex: 1 1 0%;
+    min-width: 0;
   }
 
   .filter-text-input {
@@ -1646,8 +1760,9 @@
     border-radius: 6px;
     color: var(--fg);
     font-size: 12px;
-    padding: 6px 10px;
+    padding: 6px 8px;
     outline: none;
+    max-width: 100%;
     transition: border-color 0.15s;
   }
 
@@ -1672,6 +1787,9 @@
     border-radius: 6px;
     background: var(--chip);
     color: var(--fg);
+    width: 100%;
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
 
   .validation-banner.match {
@@ -1693,8 +1811,10 @@
   }
 
   .safe-inspection-container {
-    padding: 10px 4px;
+    padding: 8px 4px;
     border-bottom: 1px solid var(--line);
+    width: 100%;
+    min-width: 0;
   }
 
   .safe-inspection-empty {
@@ -1708,8 +1828,10 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 240px;
+    max-height: 200px;
     overflow-y: auto;
+    overflow-x: hidden;
+    width: 100%;
   }
 
   .safe-inspection-item {
@@ -1719,16 +1841,18 @@
     background: var(--chip);
     border: 1px solid var(--line);
     border-radius: 6px;
-    padding: 8px 10px;
-    gap: 12px;
+    padding: 6px 8px;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
   }
 
   .safe-inspection-details {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     min-width: 0;
-    flex: 1;
+    flex: 1 1 0%;
   }
 
   .safe-inspection-meta {
@@ -1749,29 +1873,41 @@
 
   .safe-inspection-content {
     font-family: monospace;
-    font-size: 12px;
+    font-size: 11.5px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    width: 100%;
+    min-width: 0;
   }
 
   .safe-masked-text {
     letter-spacing: 2px;
     color: var(--mut);
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .safe-revealed-text {
     color: var(--fg);
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .safe-inspection-actions {
     display: flex;
-    gap: 6px;
+    gap: 4px;
     flex-shrink: 0;
   }
 
   .btn-sm {
-    padding: 3px 8px;
+    padding: 3px 7px;
     font-size: 11px;
   }
 
@@ -1786,25 +1922,29 @@
     padding: 3px 8px;
     border-radius: 6px;
     border: 1px solid var(--line);
+    flex-shrink: 0;
   }
 
   .about-card {
-    padding: 16px 8px;
+    padding: 12px 4px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 16px;
+    width: 100%;
+    min-width: 0;
   }
 
   .about-header {
     display: flex;
-    gap: 16px;
+    gap: 14px;
     align-items: center;
+    min-width: 0;
   }
 
   .about-logo {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
     flex-shrink: 0;
   }
 
@@ -1815,7 +1955,7 @@
   }
 
   .about-title {
-    font-size: 20px;
+    font-size: 19px;
     font-weight: 700;
     color: var(--fg);
   }
@@ -1828,9 +1968,10 @@
 
   .about-desc {
     margin: 4px 0 0;
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--mut);
     line-height: 1.4;
+    word-break: break-word;
   }
 
   .about-specs {
@@ -1840,7 +1981,8 @@
     background: var(--chip);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 10px 12px;
+    width: 100%;
   }
 
   .about-spec-row {
@@ -1848,15 +1990,21 @@
     justify-content: space-between;
     align-items: center;
     font-size: 12px;
+    gap: 8px;
+    min-width: 0;
   }
 
   .spec-label {
     color: var(--dim);
+    flex-shrink: 0;
   }
 
   .spec-val {
     color: var(--fg);
     font-weight: 500;
+    text-align: right;
+    word-break: break-word;
+    min-width: 0;
   }
 
   /* Information Density: Minimal hides secondary description helpers */
@@ -1875,33 +2023,56 @@
 
   /* Layout Density: Compact */
   :global(:root[data-layout-density="compact"]) .srow {
-    padding: 8px 4px;
-    gap: 10px;
+    padding: 7px 4px;
+    gap: 8px;
   }
 
   :global(:root[data-layout-density="compact"]) .stb {
-    height: 38px;
-    padding: 0 14px;
+    height: 36px;
+    padding: 0 12px;
   }
 
   :global(:root[data-layout-density="compact"]) .set-tabs button {
-    padding: 5px 8px;
-    font-size: 11.5px;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .set-body {
+    padding: 8px 12px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .shortcut-input {
+    width: 105px;
+    padding: 4px 6px;
+    font-size: 11px;
   }
 
   /* Layout Density: Comfortable */
   :global(:root[data-layout-density="comfortable"]) .srow {
-    padding: 16px 6px;
-    gap: 20px;
+    padding: 14px 4px;
+    gap: 14px;
   }
 
   :global(:root[data-layout-density="comfortable"]) .stb {
-    height: 52px;
-    padding: 0 20px;
+    height: 48px;
+    padding: 0 16px;
   }
 
   :global(:root[data-layout-density="comfortable"]) .set-tabs button {
-    padding: 8px 14px;
-    font-size: 13px;
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .set-body {
+    padding: 14px 16px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .seg button {
+    padding: 5px 9px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .shortcut-input {
+    width: 120px;
+    padding: 6px 8px;
   }
 </style>
