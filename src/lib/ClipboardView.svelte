@@ -11,6 +11,11 @@
     setWindowHeight,
     togglePinClipboardEntry,
   } from "./tauri";
+  import {
+    loadSettings,
+    onSettingsChanged,
+    type SettingsState,
+  } from "./settings";
 
   interface Props {
     onClose: () => void;
@@ -18,6 +23,8 @@
   }
 
   const { onClose, onSwitchToLauncher }: Props = $props();
+
+  let settings = $state<SettingsState>(loadSettings());
 
   const CLIPBOARD_WINDOW_HEIGHT = 560;
 
@@ -589,21 +596,35 @@
       unlisten = fn;
     });
 
+    let unlistenSettings: (() => void) | undefined;
+    void onSettingsChanged((newSettings) => {
+      settings = newSettings;
+    }).then((fn) => {
+      unlistenSettings = fn;
+    });
+
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("copy", handleCopy);
 
     return () => {
       clearTimeout(feedbackTimer);
       unlisten?.();
+      unlistenSettings?.();
       window.removeEventListener("keydown", handleKeydown);
       window.removeEventListener("copy", handleCopy);
     };
   });
 </script>
 
-<div class="clipboard-root" role="dialog" aria-label="Clipboard History">
+<div
+  class="clipboard-root"
+  data-info-density={settings.informationDensity}
+  data-layout-density={settings.layoutDensity}
+  role="dialog"
+  aria-label="Lux Clipboard History"
+>
   <!-- Top search bar -->
-  <div class="bar">
+  <div class="bar" data-tauri-drag-region>
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -1022,6 +1043,7 @@
     </span>
     <span class="sp"></span>
     <span id="msg">{feedbackMessage}</span>
+    <span class="foot-detail"><kbd>↑</kbd><kbd>↓</kbd> Select</span>
 
     {#if selectedItem}
       <div class="g1" id="gp">
@@ -1685,5 +1707,166 @@
     font: 500 11.5px Inter, "Segoe UI", system-ui, sans-serif;
     color: var(--dim);
     padding: 6px 8px 4px;
+  }
+
+  /* Foot detail hint (only visible in detailed mode) */
+  .foot-detail {
+    display: none;
+  }
+
+  /* Information Density: Minimal */
+  /* Show essential content and controls only. Hide nonessential metadata, secondary descriptions, and hints. */
+  .clipboard-root[data-info-density="minimal"] .s,
+  :global(:root[data-info-density="minimal"]) .clipboard-root .s {
+    display: none !important;
+  }
+
+  .clipboard-root[data-info-density="minimal"] .r,
+  :global(:root[data-info-density="minimal"]) .clipboard-root .r {
+    display: none !important;
+  }
+
+  .clipboard-root[data-info-density="minimal"] .pvi,
+  :global(:root[data-info-density="minimal"]) .clipboard-root .pvi {
+    display: none !important;
+  }
+
+  .clipboard-root[data-info-density="minimal"] .pvbox,
+  :global(:root[data-info-density="minimal"]) .clipboard-root .pvbox {
+    height: 100% !important;
+    border-bottom: 0 !important;
+  }
+
+  .clipboard-root[data-info-density="minimal"] #cnt,
+  :global(:root[data-info-density="minimal"]) .clipboard-root #cnt {
+    display: none !important;
+  }
+
+  .clipboard-root[data-info-density="minimal"] .foot .k,
+  :global(:root[data-info-density="minimal"]) .clipboard-root .foot .k {
+    display: none !important;
+  }
+
+  /* Information Density: Detailed */
+  /* Emphasize metadata and rich guidance */
+  .clipboard-root[data-info-density="detailed"] .s,
+  :global(:root[data-info-density="detailed"]) .clipboard-root .s {
+    opacity: 0.95;
+    font-weight: 500;
+  }
+
+  .clipboard-root[data-info-density="detailed"] .foot-detail,
+  :global(:root[data-info-density="detailed"]) .clipboard-root .foot-detail {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--dim);
+    font-size: 11.5px;
+  }
+
+  /* Layout Density: Compact reduces dimensions, row heights and padding */
+  .clipboard-root[data-layout-density="compact"] .bar,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .bar {
+    height: 52px;
+    padding: 0 14px;
+    gap: 8px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] #q,
+  :global(:root[data-layout-density="compact"]) .clipboard-root #q {
+    font-size: 18px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .row,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .row {
+    height: 36px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .ico,
+  .clipboard-root[data-layout-density="compact"] .thumb,
+  .clipboard-root[data-layout-density="compact"] .sw,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .ico,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .thumb,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .sw {
+    width: 22px;
+    height: 22px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .t,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .t {
+    font-size: 13px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .s,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .s {
+    font-size: 11.5px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .foot,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .foot {
+    height: 38px;
+    padding: 0 14px;
+    font-size: 11.5px;
+    gap: 8px;
+  }
+
+  .clipboard-root[data-layout-density="compact"] .pop .row,
+  :global(:root[data-layout-density="compact"]) .clipboard-root .pop .row {
+    height: 30px !important;
+    padding: 0 6px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  /* Layout Density: Comfortable provides spacious rows and larger touch/click targets */
+  .clipboard-root[data-layout-density="comfortable"] .bar,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .bar {
+    height: 70px;
+    padding: 0 20px;
+    gap: 12px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .row,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .row {
+    height: 56px;
+    padding: 0 14px;
+    gap: 14px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .ico,
+  .clipboard-root[data-layout-density="comfortable"] .thumb,
+  .clipboard-root[data-layout-density="comfortable"] .sw,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .ico,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .thumb,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .sw {
+    width: 36px;
+    height: 36px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .t,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .t {
+    font-size: 15px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .s,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .s {
+    font-size: 13px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .foot,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .foot {
+    height: 46px;
+    padding: 0 20px;
+    font-size: 13px;
+    gap: 12px;
+  }
+
+  .clipboard-root[data-layout-density="comfortable"] .pop .row,
+  :global(:root[data-layout-density="comfortable"]) .clipboard-root .pop .row {
+    height: 38px !important;
+    padding: 0 10px;
+    gap: 10px;
   }
 </style>

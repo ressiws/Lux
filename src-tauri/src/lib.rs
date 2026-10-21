@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod clipboard_filters;
 pub mod features;
 pub mod search;
 pub mod shortcuts;
@@ -10,7 +11,10 @@ use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
     clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
-    toggle_pin_clipboard_entry,
+    get_filtered_clipboard_history, toggle_pin_clipboard_entry,
+};
+use clipboard_filters::{
+    get_clipboard_filters_config, save_clipboard_filters_config, validate_clipboard_filter,
 };
 use features::{get_features_config, set_feature_enabled};
 use shortcuts::{get_shortcuts_status, update_shortcuts};
@@ -53,8 +57,25 @@ fn reveal_item_in_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_launcher_height(expanded: bool, app: AppHandle) -> Result<(), String> {
+fn set_launcher_height(
+    expanded: bool,
+    idle_height: Option<f64>,
+    app: AppHandle,
+    state: State<'_, LauncherState>,
+) -> Result<(), String> {
+    if let Some(h) = idle_height {
+        state.set_idle_height(h);
+    }
     window::set_launcher_height(&app, expanded)
+}
+
+#[tauri::command]
+fn set_launcher_idle_height(
+    height: f64,
+    state: State<'_, LauncherState>,
+) -> Result<(), String> {
+    state.set_idle_height(height);
+    Ok(())
 }
 
 #[tauri::command]
@@ -102,7 +123,14 @@ fn hide_settings(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn notify_frontend_ready(app: AppHandle, state: State<'_, LauncherState>) -> Result<(), String> {
+fn notify_frontend_ready(
+    app: AppHandle,
+    state: State<'_, LauncherState>,
+    idle_height: Option<f64>,
+) -> Result<(), String> {
+    if let Some(h) = idle_height {
+        state.set_idle_height(h);
+    }
     state.mark_frontend_ready();
     if state.should_show_on_ready() {
         state.set_show_on_ready(false);
@@ -134,6 +162,7 @@ pub fn run() {
             open_target_as_admin,
             reveal_item_in_folder,
             set_launcher_height,
+            set_launcher_idle_height,
             set_window_height,
             set_native_glass,
             reindex,
@@ -141,6 +170,10 @@ pub fn run() {
             update_shortcuts,
             get_shortcuts_status,
             get_clipboard_history,
+            get_filtered_clipboard_history,
+            get_clipboard_filters_config,
+            save_clipboard_filters_config,
+            validate_clipboard_filter,
             copy_clipboard_entry,
             delete_clipboard_entry,
             clear_clipboard_history,
@@ -184,15 +217,23 @@ pub fn run() {
                 }
             };
 
+            let pos_path = window::get_window_position_path(handle);
+            let saved_position = pos_path.as_deref().and_then(window::load_persisted_position_from_path);
+
             app.manage(LauncherState::new(
                 shortcut_config.launcher.clone(),
                 native_glass_supported,
+                saved_position,
             ));
 
             app.manage(shortcuts::ShortcutsState::new(
                 shortcut_config.launcher.clone(),
                 shortcut_config.clipboard.clone(),
             ));
+
+            let filters_config = clipboard_filters::load_or_default_filters_config(handle);
+            let filters_state = clipboard_filters::ClipboardFiltersState::new(filters_config);
+            app.manage(filters_state);
 
             let clipboard_state = clipboard::ClipboardState::new(clipboard::DEFAULT_MAX_CLIPBOARD_ENTRIES);
             if features_config.clipboard_history {
@@ -254,6 +295,9 @@ pub fn run() {
                         }
                         _ => {}
                     }
+                }
+                WindowEvent::Moved(pos) => {
+                    window::handle_window_moved(win, *pos);
                 }
                 _ => {}
             }

@@ -1,27 +1,44 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type SettingsCategory = "general" | "appearance" | "search" | "features" | "shortcuts";
+export type SettingsCategory =
+  | "general"
+  | "appearance"
+  | "search"
+  | "clipboard"
+  | "features"
+  | "about";
+
+export type InformationDensity = "minimal" | "normal" | "detailed";
+export type LayoutDensity = "compact" | "normal" | "comfortable";
 
 export interface SettingsState {
   theme: "system" | "light" | "dark";
   layout: "list" | "grid";
+  informationDensity: InformationDensity;
+  layoutDensity: LayoutDensity;
   preview: boolean;
   login: boolean;
   progressBar: boolean;
   caret: boolean;
   fileSearch: boolean;
   clipboardHistory: boolean;
+  flowPrefixCompatibility: boolean;
+  flowPrefixes: string[];
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
   theme: "system",
   layout: "list",
+  informationDensity: "normal",
+  layoutDensity: "normal",
   preview: true,
   login: false,
   progressBar: true,
   caret: true,
   fileSearch: true,
   clipboardHistory: true,
+  flowPrefixCompatibility: true,
+  flowPrefixes: ["et"],
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";
@@ -35,6 +52,18 @@ export function loadSettings(): SettingsState {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Backward compatibility mapping for old interfaceStyle
+      if (parsed.interfaceStyle && !parsed.informationDensity) {
+        parsed.informationDensity = parsed.interfaceStyle;
+      }
+      if (parsed.interfaceStyle && !parsed.layoutDensity) {
+        parsed.layoutDensity =
+          parsed.interfaceStyle === "minimal"
+            ? "compact"
+            : parsed.interfaceStyle === "detailed"
+              ? "comfortable"
+              : "normal";
+      }
       return { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch {
@@ -61,6 +90,9 @@ export function applyThemeAndCaret(settings: SettingsState): void {
   } else {
     root.dataset.theme = settings.theme;
   }
+  delete root.dataset.style;
+  root.dataset.infoDensity = settings.informationDensity || "normal";
+  root.dataset.layoutDensity = settings.layoutDensity || "normal";
   root.style.setProperty(
     "--caret-color",
     settings.caret ? "var(--fg)" : "transparent",
@@ -73,4 +105,42 @@ export async function onSettingsChanged(
   return listen<SettingsState>(EVENT_SETTINGS_CHANGED, (event) => {
     handler(event.payload);
   });
+}
+
+export function getIdleLauncherHeight(
+  infoDensity: InformationDensity,
+  layoutDensity: LayoutDensity,
+): number {
+  if (infoDensity === "minimal") {
+    switch (layoutDensity) {
+      case "compact":
+        return 78;
+      case "comfortable":
+        return 114;
+      case "normal":
+      default:
+        return 96;
+    }
+  } else if (infoDensity === "detailed") {
+    switch (layoutDensity) {
+      case "compact":
+        return 132;
+      case "comfortable":
+        return 174;
+      case "normal":
+      default:
+        return 152;
+    }
+  } else {
+    // normal info density
+    switch (layoutDensity) {
+      case "compact":
+        return 124;
+      case "comfortable":
+        return 166;
+      case "normal":
+      default:
+        return 144;
+    }
+  }
 }

@@ -118,6 +118,32 @@ export interface ClipboardEntry {
   readonly colorHex: string | null;
   readonly colorRgb: string | null;
   readonly colorHsl: string | null;
+  readonly isFiltered?: boolean;
+  readonly matchedFilter?: string | null;
+}
+
+export type ExclusionMode = "ignore" | "hide";
+
+export interface CustomFilter {
+  id: string;
+  name: string;
+  pattern: string;
+  isRegex: boolean;
+  enabled: boolean;
+}
+
+export interface ClipboardFiltersConfig {
+  mode: ExclusionMode;
+  filterSecrets: boolean;
+  filterCamelCase: boolean;
+  filterCreditCards: boolean;
+  customFilters: CustomFilter[];
+}
+
+export interface FilterValidationResult {
+  valid: boolean;
+  error: string | null;
+  matchesTest: boolean | null;
 }
 
 export interface ShortcutConfigStatus {

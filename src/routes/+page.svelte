@@ -31,11 +31,15 @@
   import SettingsView from "$lib/SettingsView.svelte";
   import {
     applyThemeAndCaret,
+    getIdleLauncherHeight,
     loadSettings,
     onSettingsChanged,
+    saveSettings,
     type SettingsState,
   } from "$lib/settings";
+  import type { SearchFilter } from "$lib/mock-data";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { resolvePrefix } from "$lib/prefix";
   import type {
     FeaturesConfig,
     IndexStats,
@@ -82,14 +86,27 @@
   let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let isSearching = $state(false);
   let searchBarVisible = $state(false);
+  let activeFilter = $state<SearchFilter>("all");
 
-  const isIdle = $derived(query.trim().length === 0);
+  const prefixResolution = $derived(
+    resolvePrefix(
+      query,
+      settings.flowPrefixCompatibility,
+      settings.flowPrefixes,
+    ),
+  );
+  const effectiveQuery = $derived(prefixResolution.effectiveQuery);
+  const isIdle = $derived(effectiveQuery.trim().length === 0);
   const sections = $derived(
-    buildSections(query, searchResponse, {
+    buildSections(effectiveQuery, searchResponse, {
       enableFileSearch: settings.fileSearch,
+      filter: activeFilter,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
+  const showViewSelector = $derived(
+    !isIdle && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+  );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
   );
@@ -103,7 +120,8 @@
     ),
   );
   const showEmptyState = $derived(
-    query.trim().length > 0 && hasOnlyFallbackSections(sections),
+    effectiveQuery.trim().length > 0 &&
+      (flatItems.length === 0 || hasOnlyFallbackSections(sections)),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
 
@@ -112,11 +130,19 @@
 
   const shouldExpand = $derived(!isIdle);
 
+  const currentIdleHeight = $derived(
+    getIdleLauncherHeight(settings.informationDensity, settings.layoutDensity),
+  );
+
+  let lastSyncedHeight: number | undefined;
+
   async function syncWindowHeight(expanded: boolean): Promise<void> {
-    if (windowExpanded === expanded) return;
+    const targetHeight = expanded ? 500 : currentIdleHeight;
+    if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
     windowExpanded = expanded;
+    lastSyncedHeight = targetHeight;
     try {
-      await setLauncherHeight(expanded);
+      await setLauncherHeight(expanded, currentIdleHeight);
     } catch {
       // Ignore if outside Tauri
     }
@@ -208,11 +234,35 @@
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
-    void performSearch(val);
+    const resolved = resolvePrefix(
+      val,
+      settings.flowPrefixCompatibility,
+      settings.flowPrefixes,
+    ).effectiveQuery;
+    void performSearch(resolved);
+    focusSearchInput();
+  }
+
+  function toggleFilter(filter: "apps" | "files" | "actions"): void {
+    if (activeFilter === filter) {
+      activeFilter = "all";
+    } else {
+      activeFilter = filter;
+    }
+    selectedIndex = 0;
+    selectedActionIndex = 0;
+    actionsOpen = false;
+    focusSearchInput();
+  }
+
+  function setLayout(layout: "list" | "grid"): void {
+    settings = { ...settings, layout };
+    saveSettings(settings);
     focusSearchInput();
   }
 
   function resetLauncherState(shouldFocus: boolean): void {
+    activeFilter = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
     query = "";
@@ -444,7 +494,7 @@
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
 
-    const q = query;
+    const q = effectiveQuery;
     if (q.trim().length === 0) {
       isSearching = false;
       searchBarVisible = false;
@@ -499,6 +549,24 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     const count = flatItems.length;
+
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+      if (event.key === "1") {
+        event.preventDefault();
+        toggleFilter("apps");
+        return;
+      }
+      if (event.key === "2") {
+        event.preventDefault();
+        toggleFilter("files");
+        return;
+      }
+      if (event.key === "3") {
+        event.preventDefault();
+        toggleFilter("actions");
+        return;
+      }
+    }
 
     if (
       (event.ctrlKey || event.metaKey) &&
@@ -769,7 +837,11 @@
     applyThemeAndCaret(settings);
     focusSearchInput();
     void performSearch("");
-    void notifyFrontendReady().catch(() => {});
+    const idleH = getIdleLauncherHeight(
+      settings.informationDensity,
+      settings.layoutDensity,
+    );
+    void notifyFrontendReady(idleH).catch(() => {});
 
     void getIndexStats()
       .then((stats) => {
@@ -811,6 +883,9 @@
     void onSettingsChanged((newSettings) => {
       settings = newSettings;
       applyThemeAndCaret(settings);
+      if (appMode === "launcher" && isIdle) {
+        void syncWindowHeight(false);
+      }
     }).then((unlisten) => {
       if (disposed) {
         unlisten();
@@ -935,20 +1010,37 @@
   role="dialog"
   aria-label="Lux command palette"
 >
-  <div class="bar" id="bar">
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      stroke-linecap="round"
-      aria-hidden="true"
-    >
-      <circle cx="9" cy="9" r="5.5" />
-      <path d="m13.2 13.2 3.3 3.3" />
-    </svg>
+  <div class="bar" id="bar" data-tauri-drag-region>
+    {#if isIdle}
+      <div class="logo bar-logo" aria-label="Lux">
+        <svg viewBox="0 0 64 64" width="14" height="14" fill="currentColor">
+          <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
+        </svg>
+      </div>
+    {:else}
+      <svg
+        class="search-icon"
+        width="22"
+        height="22"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <circle cx="9" cy="9" r="5.5" />
+        <path d="m13.2 13.2 3.3 3.3" />
+      </svg>
+    {/if}
+    {#if prefixResolution.hasPrefix && prefixResolution.prefix}
+      <span
+        class="prefix-pill"
+        title="Prefix '{prefixResolution.prefix}' ignored for Flow Launcher compatibility"
+      >
+        {prefixResolution.prefix}
+      </span>
+    {/if}
     <input
       id="q"
       bind:this={searchInput}
@@ -956,32 +1048,151 @@
       oninput={handleQueryInput}
       autocomplete="off"
       spellcheck="false"
-      placeholder="Search apps, files, commands…"
+      placeholder="Search Anything…"
       aria-label="Search"
     />
     <div class="spin" aria-hidden="true"></div>
-    <button
-      class="gear"
-      id="gear"
-      type="button"
-      aria-label="Open Lux settings"
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={handleOpenSettings}
-    >
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 20 20"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.6"
-        stroke-linecap="round"
+
+    {#if showViewSelector}
+      <div class="view-selector" role="radiogroup" aria-label="Results view">
+        <button
+          type="button"
+          class="view-btn"
+          class:active={settings.layout === "list"}
+          role="radio"
+          aria-checked={settings.layout === "list"}
+          title="List view"
+          aria-label="List view"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => setLayout("list")}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="view-btn"
+          class:active={settings.layout === "grid"}
+          role="radio"
+          aria-checked={settings.layout === "grid"}
+          title="Grid view"
+          aria-label="Grid view"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => setLayout("grid")}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        </button>
+      </div>
+      <div class="bar-divider" aria-hidden="true"></div>
+    {/if}
+
+    <div class="filter-group" role="toolbar" aria-label="Search filters">
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "apps"}
+        aria-pressed={activeFilter === "apps"}
+        title="Search Applications (Ctrl+1)"
+        aria-label="Filter: Applications"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("apps")}
       >
-        <path d="M3 6h7M14 6h3M3 14h3M10 14h7" />
-        <circle cx="12" cy="6" r="2" />
-        <circle cx="8" cy="14" r="2" />
-      </svg>
-    </button>
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <path d="M3 9h18M9 21V9" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "files"}
+        aria-pressed={activeFilter === "files"}
+        title="Search Files (Ctrl+2)"
+        aria-label="Filter: Files and Folders"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("files")}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "actions"}
+        aria-pressed={activeFilter === "actions"}
+        title="Search Actions (Ctrl+3)"
+        aria-label="Filter: Actions and Commands"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("actions")}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+        </svg>
+      </button>
+    </div>
     {#if isIndexing && settings.progressBar}
       <div class="progress-bar indexing-bar" aria-hidden="true" title="Indexing applications and files…">
         <div class="progress-bar-fill indexing-fill"></div>
@@ -994,31 +1205,7 @@
     {/if}
   </div>
 
-  <div class="hints" id="hints">
-    <div class="hr">
-      Try
-      <button
-        type="button"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => setQuery("Firefox")}
-      >
-        Firefox
-      </button>
-      <button
-        type="button"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => setQuery("25 EUR to USD")}
-      >
-        25 EUR to USD
-      </button>
-    </div>
-    <div class="hk">
-      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
-      <span><kbd>↵</kbd> open</span>
-      <span><kbd>Ctrl</kbd><kbd>K</kbd> actions</span>
-      <span><kbd>Esc</kbd> close</span>
-    </div>
-  </div>
+
 
   <div class="body">
     <div id="list" role="listbox" aria-label="Results" bind:this={listContainer}>
@@ -1036,8 +1223,18 @@
             <circle cx="11" cy="11" r="6.5" />
             <path d="m16 16 4 4M9 11h4" />
           </svg>
-          <div class="t">No results for “{query.trim()}”</div>
-          <p>Check the spelling, or try one of these.</p>
+          <div class="t">
+            {#if activeFilter === "apps"}
+              No applications for “{effectiveQuery.trim()}”
+            {:else if activeFilter === "files"}
+              No files for “{effectiveQuery.trim()}”
+            {:else if activeFilter === "actions"}
+              No actions for “{effectiveQuery.trim()}”
+            {:else}
+              No results for “{effectiveQuery.trim()}”
+            {/if}
+          </div>
+          <p>Check the spelling, or try another search.</p>
         </div>
       {/if}
 
@@ -1306,6 +1503,7 @@
       </svg>
     </div>
     <span id="msg">{displayedMessage}</span>
+    <span class="foot-detail"><kbd>↑</kbd><kbd>↓</kbd> Select</span>
     <span class="sp"></span>
     <div
       class="g1"
@@ -1499,6 +1697,11 @@
     user-select: none;
   }
 
+  .win,
+  .win * {
+    box-sizing: border-box;
+  }
+
   .win {
     width: 100vw;
     height: 100vh;
@@ -1515,20 +1718,43 @@
   }
 
   .win.idle {
-    height: 144px;
-    max-height: 144px;
+    height: 100%;
+    max-height: 100%;
     flex: none;
+    overflow: hidden;
   }
 
   .bar {
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 68px;
-    padding: 0 18px;
+    height: 64px;
+    padding: 0 20px;
     border-bottom: 1px solid var(--line);
     flex: none;
     position: relative;
+  }
+
+  .bar-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--fg);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+    flex: none;
+  }
+
+  .bar-logo svg {
+    display: block;
+  }
+
+  .bar .search-icon {
+    flex: none;
+    color: var(--mut);
+    width: 22px;
+    height: 22px;
   }
 
   .progress-bar {
@@ -1612,6 +1838,21 @@
     color: var(--dim);
   }
 
+  .prefix-pill {
+    flex: none;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--chip);
+    color: var(--mut);
+    border: 1px solid var(--line);
+    user-select: none;
+    line-height: 1.4;
+  }
+
   .spin {
     width: 15px;
     height: 15px;
@@ -1628,30 +1869,87 @@
     }
   }
 
-  .gear {
-    background: none;
-    border: 0;
-    color: var(--mut);
-    padding: 7px;
-    border-radius: 8px;
-    cursor: pointer;
-    display: grid;
-    place-items: center;
+  .view-selector {
+    display: inline-flex;
+    align-items: center;
+    background: var(--chip);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
     flex: none;
   }
 
-  .gear:hover {
-    background: var(--sel);
+  .view-btn {
+    border: none;
+    background: transparent;
+    color: var(--mut);
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .view-btn:hover {
     color: var(--fg);
   }
 
-  .hints {
-    display: none;
-    padding: 8px 20px 16px;
+  .view-btn.active {
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 
-  .idle:not(.collapsing) .hints {
-    display: block;
+  .bar-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--line);
+    margin: 0 4px;
+    flex: none;
+  }
+
+  .filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+  }
+
+  .filter-btn {
+    border: none;
+    background: transparent;
+    color: var(--mut);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .filter-btn:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .filter-btn.active {
+    background: var(--sel);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .view-btn,
+    .filter-btn {
+      transition: none !important;
+    }
   }
 
   .idle:not(.collapsing) .body,
@@ -1663,44 +1961,8 @@
     border-bottom-color: transparent;
   }
 
-  .hr {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    color: var(--dim);
-    font-size: 12.5px;
-    flex-wrap: wrap;
-  }
-
-  .hr button {
-    font: inherit;
-    font-size: 12.5px;
-    color: var(--mut);
-    background: var(--chip);
-    border: 0;
-    border-radius: 6px;
-    padding: 3px 9px;
-    cursor: pointer;
-  }
-
-  .hr button:hover {
-    background: var(--sel);
-    color: var(--fg);
-  }
-
-  .hk {
-    display: flex;
-    gap: 16px;
-    margin-top: 12px;
-    color: var(--dim);
-    font-size: 12px;
-    flex-wrap: wrap;
-  }
-
-  .hk span {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
+  .foot-detail {
+    display: none;
   }
 
   .body {
@@ -1713,7 +1975,7 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
-    padding: 4px 10px 10px;
+    padding: 6px 10px 10px;
     scrollbar-width: thin;
   }
 
@@ -2000,12 +2262,28 @@
     display: flex;
     align-items: center;
     height: 42px;
-    padding: 0 14px;
+    padding: 0 20px 2px;
+    margin-bottom: 2px;
     border-top: 1px solid var(--line);
     gap: 10px;
     color: var(--mut);
     font-size: 12px;
     flex: none;
+    width: 100%;
+  }
+
+  #msg {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #pl {
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .logo {
@@ -2027,6 +2305,7 @@
 
   .foot .sp {
     flex: 1;
+    min-width: 8px;
   }
 
   .k {
@@ -2060,10 +2339,17 @@
     font: inherit;
     padding: 4px 6px;
     border-radius: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .btn:hover {
     background: var(--sel);
+  }
+
+  .g1,
+  .g2 {
+    flex-shrink: 0;
   }
 
   .g1 .btn {
@@ -2094,15 +2380,18 @@
 
   .pop {
     position: absolute;
-    right: 10px;
-    bottom: 48px;
+    right: 20px;
+    bottom: 50px;
     width: 268px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    scrollbar-width: thin;
     background: var(--bg);
     border-radius: 10px;
     box-shadow: var(--shadow);
     padding: 6px;
     display: none;
-    z-index: 4;
+    z-index: 10;
   }
 
   .pop.open {
@@ -2118,10 +2407,23 @@
     color: var(--dim);
     padding: 6px 8px 4px;
     margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .pop .row {
-    height: 34px;
+    height: 34px !important;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  .pop .row .t {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .pop .row.dan .t {
@@ -2139,4 +2441,248 @@
     max-height: 560px;
   }
 
+  /* Information Density: Minimal */
+  :global(:root[data-info-density="minimal"]) .win.idle {
+    justify-content: center;
+  }
+
+  :global(:root[data-info-density="minimal"]) .win.idle .bar {
+    flex: none;
+    border-bottom: 0;
+  }
+
+
+
+  :global(:root[data-info-density="minimal"]) .foot {
+    display: none !important;
+  }
+
+  :global(:root[data-info-density="minimal"]) .pop {
+    bottom: 16px;
+  }
+
+  :global(:root[data-info-density="minimal"]) .s {
+    max-width: 200px;
+    opacity: 0.6;
+  }
+
+  :global(:root[data-info-density="minimal"]) .r {
+    opacity: 0.6;
+  }
+
+  /* Information Density: Detailed */
+  :global(:root[data-info-density="detailed"]) .foot-detail {
+    display: inline-flex;
+  }
+
+  :global(:root[data-info-density="detailed"]) .s {
+    opacity: 0.9;
+  }
+
+  /* Layout Density: Compact */
+  :global(:root[data-layout-density="compact"]) .bar {
+    height: 52px;
+    padding: 0 16px;
+    gap: 8px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar-logo {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar-logo svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar .search-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  :global(:root[data-layout-density="compact"]) #q {
+    font-size: 18px;
+  }
+
+
+
+  :global(:root[data-layout-density="compact"]) #list {
+    padding: 4px 8px 8px;
+  }
+
+  :global(:root[data-layout-density="compact"]) #list .row {
+    height: 36px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .ico,
+  :global(:root[data-layout-density="compact"]) .ico-img,
+  :global(:root[data-layout-density="compact"]) .thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .t {
+    font-size: 13px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .s {
+    font-size: 11.5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .foot {
+    height: 38px;
+    padding: 0 16px 2px;
+    font-size: 11.5px;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .foot .logo {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    border-radius: 4px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .foot .logo svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .btn {
+    padding: 3px 5px;
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) kbd {
+    font-size: 10px;
+    padding: 1px 5px;
+    min-width: 18px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .pop {
+    right: 16px;
+    bottom: 44px;
+    width: 250px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .pop .row {
+    height: 30px !important;
+    padding: 0 6px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  :global(:root[data-info-density="minimal"][data-layout-density="compact"]) .pop {
+    bottom: 12px;
+  }
+
+  /* Layout Density: Comfortable */
+  :global(:root[data-layout-density="comfortable"]) .bar {
+    height: 72px;
+    padding: 0 24px;
+    gap: 14px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar-logo svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar .search-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) #q {
+    font-size: 24px;
+  }
+
+
+
+  :global(:root[data-layout-density="comfortable"]) #list {
+    padding: 8px 12px 12px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) #list .row {
+    height: 56px;
+    padding: 0 12px;
+    gap: 14px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .ico,
+  :global(:root[data-layout-density="comfortable"]) .ico-img,
+  :global(:root[data-layout-density="comfortable"]) .thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .t {
+    font-size: 15px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .s {
+    font-size: 13px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot {
+    height: 46px;
+    padding: 0 24px 4px;
+    font-size: 13px;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot .logo {
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot .logo svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .btn {
+    padding: 5px 8px;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) kbd {
+    font-size: 11.5px;
+    padding: 3px 7px;
+    min-width: 22px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .pop {
+    right: 24px;
+    bottom: 56px;
+    width: 280px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .pop .row {
+    height: 38px !important;
+    padding: 0 10px;
+    gap: 10px;
+  }
+
+  :global(:root[data-info-density="minimal"][data-layout-density="comfortable"]) .pop {
+    bottom: 20px;
+  }
 </style>

@@ -30,8 +30,15 @@ export async function revealItemInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_item_in_folder", { path });
 }
 
-export async function setLauncherHeight(expanded: boolean): Promise<void> {
-  return invoke<void>("set_launcher_height", { expanded });
+export async function setLauncherHeight(
+  expanded: boolean,
+  idleHeight?: number,
+): Promise<void> {
+  return invoke<void>("set_launcher_height", { expanded, idleHeight });
+}
+
+export async function setLauncherIdleHeight(height: number): Promise<void> {
+  return invoke<void>("set_launcher_idle_height", { height });
 }
 
 export async function setNativeGlass(enable: boolean): Promise<void> {
@@ -79,6 +86,32 @@ export async function setWindowHeight(height: number): Promise<void> {
 
 export async function getClipboardHistory(): Promise<import("./types").ClipboardEntry[]> {
   return invoke<import("./types").ClipboardEntry[]>("get_clipboard_history");
+}
+
+export async function getFilteredClipboardHistory(): Promise<import("./types").ClipboardEntry[]> {
+  return invoke<import("./types").ClipboardEntry[]>("get_filtered_clipboard_history");
+}
+
+export async function getClipboardFiltersConfig(): Promise<import("./types").ClipboardFiltersConfig> {
+  return invoke<import("./types").ClipboardFiltersConfig>("get_clipboard_filters_config");
+}
+
+export async function saveClipboardFiltersConfig(
+  config: import("./types").ClipboardFiltersConfig,
+): Promise<void> {
+  return invoke<void>("save_clipboard_filters_config", { config });
+}
+
+export async function validateClipboardFilter(
+  pattern: string,
+  isRegex: boolean,
+  testText?: string,
+): Promise<import("./types").FilterValidationResult> {
+  return invoke<import("./types").FilterValidationResult>("validate_clipboard_filter", {
+    pattern,
+    isRegex,
+    testText,
+  });
 }
 
 export async function copyClipboardEntry(id: string): Promise<void> {
@@ -143,8 +176,8 @@ export async function updateShortcuts(
   });
 }
 
-export async function notifyFrontendReady(): Promise<void> {
-  return invoke<void>("notify_frontend_ready");
+export async function notifyFrontendReady(idleHeight?: number): Promise<void> {
+  return invoke<void>("notify_frontend_ready", { idleHeight });
 }
 
 export async function getFeaturesConfig(): Promise<import("./types").FeaturesConfig> {
