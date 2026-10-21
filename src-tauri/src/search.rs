@@ -1644,6 +1644,23 @@ pub fn search_index(
     (app_results, file_results)
 }
 
+pub fn browse_index(
+    index: &SearchIndex,
+    category: &str,
+) -> (Vec<SearchResultItem>, Vec<SearchResultItem>) {
+    match category {
+        "apps" => {
+            let apps = index.apps.iter().map(build_app_search_result).collect();
+            (apps, Vec::new())
+        }
+        "files" => {
+            let files = index.files.iter().map(build_file_search_result).collect();
+            (Vec::new(), files)
+        }
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
 unsafe extern "system" {
@@ -2052,5 +2069,49 @@ mod tests {
         // 5. No false positives on unrelated applications
         let (apps_empty, _) = search_index(&index, "xyznotanapp");
         assert!(apps_empty.is_empty());
+    }
+
+    #[test]
+    fn test_browse_index() {
+        let index = SearchIndex {
+            apps: vec![IndexedApp {
+                name: "Firefox".to_string(),
+                subtitle: String::new(),
+                path: PathBuf::from("C:\\Firefox.lnk"),
+                location: "C:\\Firefox.exe".to_string(),
+                exec: None,
+                icon: None,
+                color: "#e8663d".to_string(),
+                keywords: String::new(),
+                size: None,
+                version: None,
+            }],
+            files: vec![IndexedFile {
+                name: "test.pdf".to_string(),
+                subtitle: "Documents".to_string(),
+                path: PathBuf::from("C:\\test.pdf"),
+                location: "C:\\".to_string(),
+                is_image: false,
+                extension: "pdf".to_string(),
+                right_label: "PDF".to_string(),
+                size: None,
+                icon: None,
+            }],
+            is_indexed: true,
+        };
+
+        let (apps, files) = browse_index(&index, "apps");
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Firefox");
+        assert_eq!(files.len(), 0);
+
+        let (apps, files) = browse_index(&index, "files");
+        assert_eq!(apps.len(), 0);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "test.pdf");
+
+        let (apps, files) = browse_index(&index, "actions");
+        assert_eq!(apps.len(), 0);
+        assert_eq!(files.len(), 0);
     }
 }

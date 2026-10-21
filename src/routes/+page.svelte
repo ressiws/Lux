@@ -22,6 +22,7 @@
     onOpenLauncher,
     openSettings,
     openTarget,
+    browseLauncher,
     openTargetAsAdmin,
     reindex,
     revealItemInFolder,
@@ -38,7 +39,11 @@
     saveSettings,
     type SettingsState,
   } from "$lib/settings";
-  import type { SearchFilter } from "$lib/mock-data";
+  import type { SearchFilter, BuildSectionsOptions } from "$lib/mock-data";
+  import {
+    getAvailableSubcategories,
+    type SubcategoryItem,
+  } from "$lib/classification";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { resolvePrefix } from "$lib/prefix";
   import type {
@@ -88,6 +93,8 @@
   let isSearching = $state(false);
   let searchBarVisible = $state(false);
   let activeFilter = $state<SearchFilter>("all");
+  let activeSubcategory = $state<string>("all");
+  let browseResponse = $state<SearchResponse | undefined>(undefined);
 
   const prefixResolution = $derived(
     resolvePrefix(
@@ -97,16 +104,37 @@
     ),
   );
   const effectiveQuery = $derived(prefixResolution.effectiveQuery);
-  const isIdle = $derived(effectiveQuery.trim().length === 0);
+  const isBrowseMode = $derived(activeFilter !== "all");
+  const isIdle = $derived(effectiveQuery.trim().length === 0 && !isBrowseMode);
+
+  // All items in the selected category (without subcategory filtering)
+  // to compute available contextual subcategories that actually have results.
+  const allCategoryItems = $derived.by<LauncherItem[]>(() => {
+    if (!isBrowseMode) return [];
+    const base = buildSections(effectiveQuery, searchResponse, {
+      enableFileSearch: settings.fileSearch,
+      filter: activeFilter,
+      subcategory: "all",
+      browseResponse,
+    });
+    return base.flatMap((s) => s.items);
+  });
+
+  const availableSubcategories = $derived(
+    getAvailableSubcategories(activeFilter, allCategoryItems),
+  );
+
   const sections = $derived(
     buildSections(effectiveQuery, searchResponse, {
       enableFileSearch: settings.fileSearch,
       filter: activeFilter,
+      subcategory: activeSubcategory,
+      browseResponse,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
   const showViewSelector = $derived(
-    !isIdle && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+    (isBrowseMode || !isIdle) && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
@@ -115,14 +143,14 @@
     Boolean(
       selectedItem &&
         settings.preview &&
-        selectedItem.category !== "calc" &&
-        selectedItem.category !== "fb" &&
-        !isIdle,
+        selectedItem.category !== "calc"
+        && selectedItem.category !== "fb"
+        && (isBrowseMode || !isIdle),
     ),
   );
   const showEmptyState = $derived(
-    effectiveQuery.trim().length > 0 &&
-      (flatItems.length === 0 || hasOnlyFallbackSections(sections)),
+    (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
+      (effectiveQuery.trim().length > 0 || isBrowseMode),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
 
@@ -193,6 +221,9 @@
       searchBarVisible = false;
       clearTimeout(searchProgressTimer);
       searchResponse = undefined;
+      if (activeFilter !== "all" && !browseResponse) {
+        void loadBrowseData(activeFilter);
+      }
       return;
     }
 
@@ -244,11 +275,36 @@
     focusSearchInput();
   }
 
+  async function loadBrowseData(filter: SearchFilter): Promise<void> {
+    if (filter === "all" || filter === "actions") {
+      browseResponse = undefined;
+      return;
+    }
+    try {
+      const resp = await browseLauncher(filter);
+      browseResponse = resp;
+    } catch {
+      // Ignore if outside Tauri environment
+    }
+  }
+
+  function selectSubcategory(subcatId: string): void {
+    activeSubcategory = subcatId;
+    selectedIndex = 0;
+    selectedActionIndex = 0;
+    focusSearchInput();
+  }
+
   function toggleFilter(filter: "apps" | "files" | "actions"): void {
+    activeSubcategory = "all";
     if (activeFilter === filter) {
       activeFilter = "all";
+    activeSubcategory = "all";
+    browseResponse = undefined;
+      browseResponse = undefined;
     } else {
       activeFilter = filter;
+      void loadBrowseData(filter);
     }
     selectedIndex = 0;
     selectedActionIndex = 0;
@@ -933,6 +989,9 @@
 
     void onIndexingStatus((payload) => {
       isIndexing = payload.isIndexing;
+      if (!payload.isIndexing && activeFilter !== "all") {
+        void loadBrowseData(activeFilter);
+      }
       if (!payload.isIndexing) {
         indexStats = {
           totalApps: payload.totalApps,
@@ -1253,6 +1312,25 @@
     {/if}
   </div>
 
+  {#if activeFilter !== "all" && availableSubcategories.length > 1}
+    <div class="subcategories-bar" role="tablist" aria-label="Subcategories">
+      {#each availableSubcategories as subcat (subcat.id)}
+        <button
+          type="button"
+          class="subcat-chip"
+          class:active={activeSubcategory === subcat.id}
+          role="tab"
+          aria-selected={activeSubcategory === subcat.id}
+          tabindex="0"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => selectSubcategory(subcat.id)}
+        >
+          {subcat.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
+
 
 
   <div class="body">
@@ -1272,17 +1350,37 @@
             <path d="m16 16 4 4M9 11h4" />
           </svg>
           <div class="t">
-            {#if activeFilter === "apps"}
-              No applications for “{effectiveQuery.trim()}”
-            {:else if activeFilter === "files"}
-              No files for “{effectiveQuery.trim()}”
-            {:else if activeFilter === "actions"}
-              No actions for “{effectiveQuery.trim()}”
+            {#if effectiveQuery.trim()}
+              {#if activeFilter === "apps"}
+                No applications for “{effectiveQuery.trim()}”
+              {:else if activeFilter === "files"}
+                No files for “{effectiveQuery.trim()}”
+              {:else if activeFilter === "actions"}
+                No actions for “{effectiveQuery.trim()}”
+              {:else}
+                No results for “{effectiveQuery.trim()}”
+              {/if}
             {:else}
-              No results for “{effectiveQuery.trim()}”
+              {#if activeFilter === "apps"}
+                No applications available
+              {:else if activeFilter === "files"}
+                No files available
+              {:else if activeFilter === "actions"}
+                No actions available
+              {:else}
+                No results
+              {/if}
             {/if}
           </div>
-          <p>Check the spelling, or try another search.</p>
+          <p>
+            {#if effectiveQuery.trim()}
+              Check the spelling, or try another search.
+            {:else if activeSubcategory !== "all"}
+              No items found in this category.
+            {:else}
+              No indexed items found.
+            {/if}
+          </p>
         </div>
       {/if}
 
@@ -1464,7 +1562,7 @@
                         >{highlighted.match}</mark
                       >{/if}{highlighted.after}
                   </span>
-                  <span class="s">{item.subtitle}</span>
+                  {#if item.subtitle && item.subtitle.trim().toLowerCase() !== "application" && item.subtitle.trim().toLowerCase() !== item.rightLabel?.trim().toLowerCase()}<span class="s">{item.subtitle}</span>{/if}
                 </div>
                 <span class="r">{item.rightLabel}</span>
               </div>
@@ -1967,6 +2065,74 @@
     flex: none;
   }
 
+  .subcategories-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px 8px;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: none;
+    background: transparent;
+  }
+
+  .subcategories-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .subcat-chip {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--mut);
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 1;
+    padding: 5px 10px;
+    border-radius: 9999px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+
+  .subcat-chip:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .subcat-chip:focus-visible {
+    outline: 2px solid var(--accent, #4a8fd8);
+    outline-offset: 1px;
+  }
+
+  .subcat-chip.active {
+    background: var(--sel);
+    color: var(--fg);
+    border-color: var(--line);
+    font-weight: 600;
+  }
+
+  :global(:root[data-layout-density="compact"]) .subcategories-bar {
+    padding: 4px 12px 6px;
+    gap: 4px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .subcat-chip {
+    font-size: 10.5px;
+    padding: 3px 8px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .subcategories-bar {
+    padding: 8px 20px 10px;
+    gap: 8px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .subcat-chip {
+    font-size: 12.5px;
+    padding: 6px 12px;
+  }
+
   .filter-btn {
     border: none;
     background: transparent;
@@ -1995,7 +2161,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .view-btn,
-    .filter-btn {
+    .filter-btn,
+    .subcat-chip {
       transition: none !important;
     }
   }

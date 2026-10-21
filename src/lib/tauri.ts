@@ -18,6 +18,10 @@ export async function searchLauncher(query: string): Promise<SearchResponse> {
   return invoke<SearchResponse>("search_launcher", { query });
 }
 
+export async function browseLauncher(category: string): Promise<SearchResponse> {
+  return invoke<SearchResponse>("browse_launcher", { category });
+}
+
 export async function openTarget(path: string): Promise<void> {
   return invoke<void>("open_target", { path });
 }

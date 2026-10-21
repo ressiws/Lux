@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateMathExpression } from "./calculator";
+import { classifyApp, classifyFile, classifyAction } from "./classification";
 import type {
   HighlightParts,
   ItemAction,
@@ -399,51 +400,57 @@ export function getCategoryPlaceholder(filter: SearchFilter): string {
   }
 }
 
+export interface BuildSectionsOptions {
+  enableFileSearch?: boolean;
+  filter?: SearchFilter;
+  subcategory?: string;
+  browseResponse?: SearchResponse;
+}
+
 export function buildSections(
   rawQuery: string,
   searchResponse?: SearchResponse,
-  options?: { enableFileSearch?: boolean; filter?: SearchFilter },
+  options?: BuildSectionsOptions,
 ): LauncherSection[] {
   const trimmed = rawQuery.trim();
   const lowered = trimmed.toLowerCase();
   const filter = options?.filter ?? "all";
+  const subcategory = options?.subcategory ?? "all";
+  const enableFileSearch = options?.enableFileSearch ?? true;
 
-  const suggestedApps =
-    searchResponse && searchResponse.apps.length > 0
-      ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
-      : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
 
   // 1. Filter: Apps
   if (filter === "apps") {
-    if (!trimmed) {
-      return [
-        {
-          category: "app",
-          title: "Suggestions",
-          items: suggestedApps,
-        },
-      ];
+    let apps: LauncherItem[];
+    if (trimmed) {
+      if (searchResponse) {
+        apps = searchResponse.apps.map(mapBackendApp);
+      } else {
+        apps = MOCK_ITEMS.filter(
+          (item) => item.category === "app" && scoreItem(item, lowered) > 0,
+        );
+      }
+    } else {
+      // Browse mode: show all available applications
+      if (searchResponse && searchResponse.apps.length > 0) {
+        apps = searchResponse.apps.map(mapBackendApp);
+      } else if (options?.browseResponse && options.browseResponse.apps.length > 0) {
+        apps = options.browseResponse.apps.map(mapBackendApp);
+      } else {
+        apps = MOCK_ITEMS.filter((item) => item.category === "app");
+      }
     }
-    if (searchResponse) {
-      return searchResponse.apps.length > 0
-        ? [
-            {
-              category: "app",
-              title: SECTION_TITLES.app,
-              items: searchResponse.apps.map(mapBackendApp),
-            },
-          ]
-        : [];
+
+    if (subcategory !== "all") {
+      apps = apps.filter((app) => classifyApp(app) === subcategory);
     }
-    const matchingApps = MOCK_ITEMS.filter(
-      (item) => item.category === "app" && scoreItem(item, lowered) > 0,
-    );
-    return matchingApps.length > 0
+
+    return apps.length > 0
       ? [
           {
             category: "app",
             title: SECTION_TITLES.app,
-            items: matchingApps,
+            items: apps,
           },
         ]
       : [];
@@ -451,29 +458,40 @@ export function buildSections(
 
   // 2. Filter: Files
   if (filter === "files") {
-    if (!trimmed) {
+    if (!enableFileSearch) {
       return [];
     }
-    if (searchResponse) {
-      return searchResponse.files.length > 0
-        ? [
-            {
-              category: "file",
-              title: SECTION_TITLES.file,
-              items: searchResponse.files.map(mapBackendFile),
-            },
-          ]
-        : [];
+
+    let files: LauncherItem[];
+    if (trimmed) {
+      if (searchResponse) {
+        files = searchResponse.files.map(mapBackendFile);
+      } else {
+        files = MOCK_ITEMS.filter(
+          (item) => item.category === "file" && scoreItem(item, lowered) > 0,
+        );
+      }
+    } else {
+      // Browse mode: show all available files, folders, and images
+      if (searchResponse && searchResponse.files.length > 0) {
+        files = searchResponse.files.map(mapBackendFile);
+      } else if (options?.browseResponse && options.browseResponse.files.length > 0) {
+        files = options.browseResponse.files.map(mapBackendFile);
+      } else {
+        files = MOCK_ITEMS.filter((item) => item.category === "file");
+      }
     }
-    const matchingFiles = MOCK_ITEMS.filter(
-      (item) => item.category === "file" && scoreItem(item, lowered) > 0,
-    );
-    return matchingFiles.length > 0
+
+    if (subcategory !== "all") {
+      files = files.filter((file) => classifyFile(file) === subcategory);
+    }
+
+    return files.length > 0
       ? [
           {
             category: "file",
             title: SECTION_TITLES.file,
-            items: matchingFiles,
+            items: files,
           },
         ]
       : [];
@@ -481,20 +499,29 @@ export function buildSections(
 
   // 3. Filter: Actions
   if (filter === "actions") {
-    const matchingCmds = trimmed
+    let cmds = trimmed
       ? MOCK_COMMANDS.filter((cmd) => scoreItem(cmd, lowered) > 0)
       : [...MOCK_COMMANDS];
-    return matchingCmds.length > 0
+
+    if (subcategory !== "all") {
+      cmds = cmds.filter((cmd) => classifyAction(cmd) === subcategory);
+    }
+
+    return cmds.length > 0
       ? [
           {
             category: "cmd",
             title: trimmed ? "Actions" : "Available Actions",
-            items: matchingCmds,
+            items: cmds,
           },
         ]
       : [];
   }
 
+  const suggestedApps =
+    searchResponse && searchResponse.apps.length > 0
+      ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
+      : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
   // 4. Default / All categories
   if (!trimmed) {
     return [
@@ -532,7 +559,7 @@ export function buildSections(
     });
   }
 
-  const enableFileSearch = options?.enableFileSearch ?? true;
+
 
   if (searchResponse) {
     if (searchResponse.apps.length > 0) {

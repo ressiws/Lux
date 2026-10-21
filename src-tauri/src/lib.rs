@@ -42,6 +42,18 @@ fn search_launcher(
 }
 
 #[tauri::command]
+fn browse_launcher(
+    category: String,
+    state: State<'_, search::SearchState>,
+) -> search::SearchResponse {
+    let (apps, files) = match state.index.read() {
+        Ok(guard) => search::browse_index(&guard, &category),
+        Err(poisoned) => search::browse_index(&poisoned.into_inner(), &category),
+    };
+    search::SearchResponse { apps, files }
+}
+
+#[tauri::command]
 fn open_target(path: String) -> Result<(), String> {
     search::launch_target(&path)
 }
@@ -158,6 +170,7 @@ pub fn run() {
             hide_launcher,
             get_launcher_status,
             search_launcher,
+            browse_launcher,
             open_target,
             open_target_as_admin,
             reveal_item_in_folder,

@@ -251,6 +251,101 @@ export function runSearchIntegrationTests(): number {
     assertEqual(getCategoryPlaceholder("actions"), "Search Actions…", "Actions category placeholder");
   });
 
+  // 14. Test browse mode with empty query
+  check(() => {
+    // Apps browse mode returns all available apps
+    const appSections = buildSections("", undefined, { filter: "apps" });
+    assertEqual(appSections.length, 1, "Apps browse section present");
+    assertEqual(appSections[0].category, "app", "Apps category");
+    assertEqual(appSections[0].items.length > 0, true, "Apps populated in browse mode");
+
+    // Files browse mode returns all available files
+    const fileSections = buildSections("", undefined, { filter: "files" });
+    assertEqual(fileSections.length, 1, "Files browse section present");
+    assertEqual(fileSections[0].category, "file", "Files category");
+    assertEqual(fileSections[0].items.length > 0, true, "Files populated in browse mode");
+  });
+
+  // 15. Test subcategory filtering in browse mode
+  check(() => {
+    // Filter apps by devtools
+    const devtoolsSections = buildSections("", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+    });
+    assertEqual(devtoolsSections.length, 1, "Devtools section present");
+    assertEqual(
+      devtoolsSections[0].items.every((item) =>
+        item.name.includes("Visual Studio") || item.name.includes("Terminal"),
+      ),
+      true,
+      "Devtools only contains developer tools",
+    );
+
+    // Filter files by folders
+    const folderSections = buildSections("", undefined, {
+      filter: "files",
+      subcategory: "folders",
+    });
+    assertEqual(folderSections.length, 1, "Folders section present");
+    assertEqual(
+      folderSections[0].items.every((item) => item.rightLabel === "Folder"),
+      true,
+      "Folders subcategory contains only folders",
+    );
+
+    // Filter actions by preferences
+    const prefSections = buildSections("", undefined, {
+      filter: "actions",
+      subcategory: "preferences",
+    });
+    assertEqual(prefSections.length, 1, "Preferences actions present");
+    assertEqual(
+      prefSections[0].items.every(
+        (item) => item.name.includes("Theme") || item.name.includes("Settings"),
+      ),
+      true,
+      "Preferences only contains theme and settings",
+    );
+  });
+
+  // 16. Test browse mode with query and subcategory combined
+  check(() => {
+    const sections = buildSections("visual", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+    });
+    assertEqual(sections.length, 1, "Search within subcategory section present");
+    assertEqual(sections[0].items[0].name, "Visual Studio Code", "Matched Visual Studio Code");
+
+    // Searching for an app that doesn't belong to the selected subcategory returns empty
+    const noMatch = buildSections("spotify", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+    });
+    assertEqual(noMatch.length, 0, "Spotify not in devtools");
+  });
+
+  // 17. Test switching primary categories preserves query
+  check(() => {
+    const query = "wedding";
+    const appResult = buildSections(query, undefined, { filter: "apps" });
+    assertEqual(appResult.length, 0, "No wedding apps");
+
+    const fileResult = buildSections(query, undefined, { filter: "files" });
+    assertEqual(fileResult.length, 1, "Wedding files found");
+    assertEqual(fileResult[0].items.length > 0, true, "Files matched query");
+  });
+
+  // 18. Test empty state behavior when file search disabled
+  check(() => {
+    const disabledFileSearch = buildSections("", undefined, {
+      filter: "files",
+      enableFileSearch: false,
+    });
+    assertEqual(disabledFileSearch.length, 0, "Empty when file search disabled");
+  });
+
   return passed;
 }
 
