@@ -69,6 +69,11 @@ fn reveal_item_in_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_image_thumbnail(path: String) -> Option<String> {
+    search::get_image_thumbnail(path)
+}
+
+#[tauri::command]
 fn set_launcher_height(
     expanded: bool,
     idle_height: Option<f64>,
@@ -195,7 +200,8 @@ pub fn run() {
             open_settings,
             hide_settings,
             get_features_config,
-            set_feature_enabled
+            set_feature_enabled,
+            get_image_thumbnail
         ])
         .setup(|app| {
             let handle = app.handle();

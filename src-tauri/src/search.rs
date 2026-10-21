@@ -214,6 +214,16 @@ static FOLDER_ICON_CACHE: LazyLock<RwLock<Option<String>>> =
     LazyLock::new(|| RwLock::new(None));
 
 pub fn generate_image_thumbnail_base64(path: &Path, max_dim: u32) -> Option<String> {
+    if !path.exists() || !path.is_file() {
+        return None;
+    }
+
+    if let Some(ext) = path.extension() && ext.eq_ignore_ascii_case("svg") {
+        if let Ok(svg_bytes) = fs::read(path) {
+            return Some(format!("data:image/svg+xml;base64,{}", to_base64(&svg_bytes)));
+        }
+    }
+
     let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
     let img = reader.decode().ok()?;
     let thumb = img.thumbnail(max_dim, max_dim);
@@ -230,13 +240,22 @@ pub fn get_or_generate_thumbnail(path: &Path) -> Option<String> {
         return cached.clone();
     }
 
-    let thumb = generate_image_thumbnail_base64(path, 128);
+    let thumb = generate_image_thumbnail_base64(path, 256);
 
     if let Ok(mut guard) = THUMBNAIL_CACHE.write() {
         guard.insert(path.to_path_buf(), thumb.clone());
     }
 
     thumb
+}
+
+pub fn get_image_thumbnail(path: String) -> Option<String> {
+    let p = Path::new(&path);
+    if p.exists() && p.is_file() {
+        get_or_generate_thumbnail(p)
+    } else {
+        None
+    }
 }
 
 pub fn get_or_extract_icon(path: &Path) -> Option<String> {
@@ -1462,6 +1481,14 @@ pub fn build_full_search_index() -> SearchIndex {
         );
     }
 
+    files.sort_by(|a, b| {
+        let a_is_folder = a.right_label == "Folder";
+        let b_is_folder = b.right_label == "Folder";
+        b_is_folder
+            .cmp(&a_is_folder)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
     SearchIndex {
         apps,
         files,
@@ -1638,7 +1665,13 @@ pub fn search_index(
     let file_results: Vec<SearchResultItem> = matched_files
         .into_iter()
         .take(MAX_RESULTS_PER_CATEGORY)
-        .map(|(_, file)| build_file_search_result(file))
+        .map(|(_, file)| {
+            let mut item = build_file_search_result(file);
+            if file.is_image {
+                item.thumbnail = get_or_generate_thumbnail(&file.path);
+            }
+            item
+        })
         .collect();
 
     (app_results, file_results)
@@ -1656,15 +1689,23 @@ pub fn browse_index(
             (apps, Vec::new())
         }
         "files" => {
-            let mut files: Vec<SearchResultItem> =
-                index.files.iter().map(build_file_search_result).collect();
-            files.sort_by(|a, b| {
-                let a_is_folder = a.right_label == "Folder";
-                let b_is_folder = b.right_label == "Folder";
-                b_is_folder
-                    .cmp(&a_is_folder)
-                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            });
+            const MAX_BROWSE_FILES: usize = 500;
+            let files: Vec<SearchResultItem> = index
+                .files
+                .iter()
+                .take(MAX_BROWSE_FILES)
+                .map(|f| {
+                    let mut item = build_file_search_result(f);
+                    if f.is_image {
+                        if let Ok(guard) = THUMBNAIL_CACHE.read() {
+                            if let Some(cached) = guard.get(&f.path) {
+                                item.thumbnail = cached.clone();
+                            }
+                        }
+                    }
+                    item
+                })
+                .collect();
             (Vec::new(), files)
         }
         _ => (Vec::new(), Vec::new()),
@@ -2123,5 +2164,35 @@ mod tests {
         let (apps, files) = browse_index(&index, "actions");
         assert_eq!(apps.len(), 0);
         assert_eq!(files.len(), 0);
+    }
+
+    #[test]
+    fn test_image_thumbnail_generation_and_error_handling() {
+        // Test non-existent file returns None gracefully
+        assert_eq!(
+            generate_image_thumbnail_base64(Path::new("C:\\does_not_exist_xyz.png"), 128),
+            None
+        );
+
+        // Test non-image file returns None gracefully
+        let temp_dir = std::env::temp_dir();
+        let non_image_path = temp_dir.join("lux_test_text.txt");
+        let _ = fs::write(&non_image_path, "not an image content");
+        assert_eq!(generate_image_thumbnail_base64(&non_image_path, 128), None);
+        let _ = fs::remove_file(&non_image_path);
+
+        // Test valid synthetic image generation
+        let img_path = temp_dir.join("lux_test_image.png");
+        let img = image::RgbaImage::new(32, 32);
+        if img.save(&img_path).is_ok() {
+            let thumb = generate_image_thumbnail_base64(&img_path, 16);
+            assert!(thumb.is_some());
+            let thumb_str = thumb.unwrap();
+            assert!(thumb_str.starts_with("data:image/png;base64,"));
+
+            let cached = get_or_generate_thumbnail(&img_path);
+            assert!(cached.is_some());
+            let _ = fs::remove_file(&img_path);
+        }
     }
 }

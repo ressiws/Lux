@@ -23,6 +23,7 @@
     openSettings,
     openTarget,
     browseLauncher,
+    getImageThumbnail,
     openTargetAsAdmin,
     reindex,
     revealItemInFolder,
@@ -96,8 +97,13 @@
   let activeFilter = $state<SearchFilter>("all");
   let activeSubcategory = $state<string>("all");
   let browseResponse = $state<SearchResponse | undefined>(undefined);
-  const BATCH_SIZE = 50;
-  let visibleCount = $state(BATCH_SIZE);
+  const BATCH_SIZE_APPS = 50;
+  const BATCH_SIZE_FILES = 20;
+  function getBatchSize(filter: SearchFilter): number {
+    return filter === "files" ? BATCH_SIZE_FILES : BATCH_SIZE_APPS;
+  }
+  const browseCache = new Map<SearchFilter, SearchResponse>();
+  let visibleCount = $state(BATCH_SIZE_APPS);
   let sentinelElement = $state<HTMLElement | undefined>(undefined);
 
   const prefixResolution = $derived(
@@ -184,6 +190,37 @@
   let collapseTimer: ReturnType<typeof setTimeout> | undefined;
 
   const shouldExpand = $derived(!isIdle);
+
+  let previewThumbnailUrl = $state<string | undefined>(undefined);
+  let previewImageFailed = $state(false);
+
+  $effect(() => {
+    const item = selectedItem;
+    previewImageFailed = false;
+    if (item && item.isImage) {
+      if (item.thumbnail) {
+        previewThumbnailUrl = item.thumbnail;
+      } else if (item.path) {
+        previewThumbnailUrl = undefined;
+        const targetPath = item.path;
+        void getImageThumbnail(targetPath).then((thumb) => {
+          if (selectedItem?.path === targetPath) {
+            if (thumb) {
+              previewThumbnailUrl = thumb;
+            } else {
+              previewImageFailed = true;
+            }
+          }
+        });
+      } else {
+        previewThumbnailUrl = undefined;
+        previewImageFailed = true;
+      }
+    } else {
+      previewThumbnailUrl = undefined;
+      previewImageFailed = false;
+    }
+  });
   let observer: IntersectionObserver | undefined;
   $effect(() => {
     if (sentinelElement && visibleCount < flatItems.length) {
@@ -193,7 +230,10 @@
           (entries) => {
             if (entries[0]?.isIntersecting) {
               if (visibleCount < flatItems.length) {
-                visibleCount = Math.min(flatItems.length, visibleCount + BATCH_SIZE);
+                visibleCount = Math.min(
+                  flatItems.length,
+                  visibleCount + getBatchSize(activeFilter),
+                );
               }
             }
           },
@@ -209,7 +249,10 @@
     if (!listContainer || visibleCount >= flatItems.length) return;
     const { scrollTop, scrollHeight, clientHeight } = listContainer;
     if (scrollHeight - scrollTop - clientHeight < 200) {
-      visibleCount = Math.min(flatItems.length, visibleCount + BATCH_SIZE);
+      visibleCount = Math.min(
+        flatItems.length,
+        visibleCount + getBatchSize(activeFilter),
+      );
     }
   }
 
@@ -217,7 +260,7 @@
     const _q = effectiveQuery;
     const _f = activeFilter;
     const _s = activeSubcategory;
-    visibleCount = BATCH_SIZE;
+    visibleCount = getBatchSize(_f);
     if (listContainer) {
       listContainer.scrollTop = 0;
     }
@@ -344,9 +387,15 @@
       browseResponse = undefined;
       return;
     }
+    const cached = browseCache.get(filter);
+    if (cached) {
+      browseResponse = cached;
+      return;
+    }
     try {
       const resp = await browseLauncher(filter);
       if (seq === opSeq && activeFilter === filter) {
+        browseCache.set(filter, resp);
         browseResponse = resp;
       }
     } catch {
@@ -358,7 +407,7 @@
     activeFilter = "all";
     activeSubcategory = "all";
     browseResponse = undefined;
-    visibleCount = BATCH_SIZE;
+    visibleCount = getBatchSize("all");
     selectedIndex = 0;
     selectedActionIndex = 0;
     focusSearchInput();
@@ -369,7 +418,7 @@
 
   function selectSubcategory(subcatId: string): void {
     activeSubcategory = subcatId;
-    visibleCount = BATCH_SIZE;
+    visibleCount = getBatchSize(activeFilter);
     selectedIndex = 0;
     selectedActionIndex = 0;
     focusSearchInput();
@@ -377,7 +426,7 @@
 
   function toggleFilter(filter: "apps" | "files" | "actions"): void {
     activeSubcategory = "all";
-    visibleCount = BATCH_SIZE;
+    visibleCount = getBatchSize(filter);
     if (activeFilter === filter) {
       returnToAllCategories();
     } else {
