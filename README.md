@@ -27,11 +27,11 @@
 
 Lux is a keyboard-first desktop launcher designed to make everyday desktop tasks faster and easier to access.
 
-Inspired by tools such as Spotlight and Raycast, Lux aims to bring search, calculations, and useful actions into a compact interface that stays out of your way until you need it.
+Inspired by tools such as Spotlight and Raycast, Lux brings application launching, local file discovery, instant calculations, unit and currency conversions, and clipboard history into a clean, compact interface that stays out of your way until you need it.
 
-Built with Rust and Tauri, Lux combines native desktop integration with a modern frontend.
+Built with Rust and Tauri 2, Lux combines native desktop integration with a fast, modern Svelte 5 frontend.
 
-**Lux is under active development.** Features, interfaces, and platform behavior may change as the project evolves.
+> **Note:** Lux is currently in active early development. Features, interfaces, and platform behaviors are evolving. Primary development and testing currently target Windows, with Linux support actively in progress.
 
 ## Preview
 
@@ -39,74 +39,78 @@ Built with Rust and Tauri, Lux combines native desktop integration with a modern
   <tr>
     <td align="center" width="50%">
       <strong>Launcher</strong><br><br>
-      <img src="docs/images/launcher.png" alt="Lux launcher screenshot" width="100%"><br>
-      <sub>Search and access actions from a compact interface.</sub>
+      <img src="docs/images/launcher.png" alt="Lux launcher with active search results" width="100%"><br>
+      <sub>Fast application and local file search with category filters and contextual actions.</sub>
     </td>
     <td align="center" width="50%">
-      <strong>Calculator</strong><br><br>
-      <img src="docs/images/calculator.png" alt="Lux calculator screenshot" width="100%"><br>
-      <sub>Evaluate mathematical expressions without leaving your workflow.</sub>
+      <strong>Clipboard History</strong><br><br>
+      <img src="docs/images/clipboard-history.png" alt="Lux clipboard history manager with filtered entries" width="100%"><br>
+      <sub>Dedicated clipboard manager with automatic privacy filtering for sensitive data.</sub>
     </td>
   </tr>
 </table>
 
+<sub><em>Visual previews reflect the current application interface. Screenshot assets are updated alongside milestone releases.</em></sub>
+
 ## Current Features
 
-The current implementation includes work on:
+- **Search Anything** — Find and launch installed applications, or search genuine local files and directories with real-time indexing. Browse dedicated categories (Apps, Files, Actions) with smooth subcategory filtering, progressive loading, and interactive back navigation.
+- **Quick Answers** — Evaluate mathematical expressions (`(128 * 1.19) / 3`, `sqrt(144)`), compute financial VAT/taxes, split expenses, inspect worldwide time zones and differences, perform calendar day arithmetic, convert units (distinguishing decimal SI and binary IEC digital storage), and inspect color formats (#HEX, RGB, HSL) with visual swatches—all processed offline locally.
+- **Currency Conversion** — Convert between 160+ fiat currencies with smart local caching and offline fallback, without transmitting search queries or polling on keystrokes.
+- **Clipboard History** — Access your clipboard history in a dedicated window (<kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>). Search previous clips, filter by type (text, links, images, colors), and protect sensitive data with built-in filters for API keys, bearer tokens, credit cards, and custom regular expressions.
+- **Quick Actions** — Press <kbd>Ctrl</kbd> + <kbd>K</kbd> to inspect contextual secondary actions for any highlighted result, such as running applications as Administrator (<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd>), revealing items in File Explorer (<kbd>Ctrl</kbd> + <kbd>O</kbd>), or copying paths.
+- **Application Controls** — Run silently in the background with minimal idle resource usage. Summon the launcher via a customizable global shortcut (<kbd>Alt</kbd> + <kbd>Space</kbd> by default), dismiss it instantly with <kbd>Esc</kbd> or focus loss, and manage the application via the system tray.
+- **Customization & Display Densities** — Tailor the launcher to your preference with three information density modes (`Minimal` Spotlight-style, `Normal`, `Detailed`), three layout padding densities (`Compact`, `Normal`, `Comfortable`), `List` or `Grid` view modes, and `System`, `Light`, or `Dark` themes.
+- **Secure Password Generator** — Generate cryptographically random passwords locally on demand (`generate password 24`) that are copied directly to your clipboard without leaving traces or network requests.
 
-- **Keyboard-first launcher** — a compact interface designed for quick interaction.
-- **Global shortcut** — show or hide the launcher using a configured keyboard shortcut.
-- **Background operation** — keep the application available while working.
-- **System tray integration** — access relevant application controls.
-- **Built-in calculator** — evaluate mathematical expressions using a dedicated parser.
-- **Quick actions** — access actions associated with selected results.
-- **Windows integration** — native Acrylic backdrop support, with alternative behavior on other platforms.
-
-Lux is still evolving. Some functionality and platform-specific behavior may be incomplete or subject to change.
+For detailed usage instructions, query syntax examples, keyboard shortcuts, and configuration options, see the **[User Feature Guide](docs/features.md)**.
 
 ## Design Principles
 
-- **Fast** — prioritize responsive interactions and low idle resource usage.
-- **Focused** — keep the interface compact and keyboard-driven.
-- **Local-first** — favor local processing and user control.
-- **Private by default** — avoid unnecessary data collection and unauthorized data transmission.
-- **Maintainable** — prefer straightforward implementations over unnecessary complexity.
-- **Cross-platform** — treat Windows and Linux as first-class targets.
-- **Open source** — make the code available for inspection, use, and improvement.
+- **Fast** — Responsive keyboard-first interactions and minimal idle resource footprint.
+- **Focused** — Compact interface that stays centered and disappears immediately when dismissed.
+- **Local-first** — Local SQLite indexing and offline calculations; user data remains on the local machine.
+- **Private by default** — Zero telemetry, no hidden background queries, and local filtering for sensitive clipboard data.
+- **Maintainable** — Clean, idiomatic Rust backend and strictly typed Svelte 5 frontend without unnecessary complexity.
+- **Cross-platform** — Designed for Windows and Linux, with platform-specific capabilities isolated cleanly.
+- **Open source** — Fully open source under the MIT License for community review, contributions, and auditing.
 
 ## Privacy and Security
 
-Privacy is a core design principle of Lux.
+Privacy and local data sovereignty are core design tenets of Lux:
 
-The project prioritizes local functionality, minimal data collection, and explicit control over operations that may expose user information.
+- **Zero Telemetry**: Lux collects no analytics, usage statistics, crash telemetry, or tracking identifiers.
+- **Offline Computations**: All mathematical calculations, date arithmetic, timezone lookups, unit conversions, and password generations run 100% locally.
+- **Safe Network Boundary**: Network communication is strictly restricted to periodic, optional currency exchange rate refreshes (once per 24 hours, cached locally). Search queries, filenames, and user inputs are never transmitted over the network.
+- **Clipboard Protection**: Clipboard history includes configurable automated redaction for API tokens, secret keys, credit card numbers, and user-defined regular expressions.
+- **Least Privilege**: Application commands and file discovery respect system permissions and do not execute untrusted scripts.
 
-Network functionality that transmits application or user data requires explicit project authorization. Security-sensitive functionality should follow the principle of least privilege and validate untrusted inputs.
-
-For details, see [SECURITY.md](SECURITY.md).
+For vulnerability reporting and security practices, please consult [SECURITY.md](SECURITY.md).
 
 ## Technology Stack
 
-| Area | Technology |
-| --- | --- |
-| Desktop framework | Tauri 2 |
-| Backend | Rust |
-| Frontend framework | Svelte 5 |
-| Application framework | SvelteKit |
-| Language | TypeScript |
-| Package manager | pnpm |
+| Area | Technology | Purpose |
+| --- | --- | --- |
+| Desktop runtime | [Tauri 2](https://v2.tauri.app/) | Native window management, global shortcuts, system tray |
+| Backend | [Rust](https://www.rust-lang.org/) | Filesystem indexing, native shell integration, thumbnail generation |
+| Frontend framework | [Svelte 5](https://svelte.dev/) | Reactive UI state via modern Svelte runes |
+| Application framework | [SvelteKit](https://kit.svelte.dev/) | Client-side routing and static adapter packaging |
+| Language | [TypeScript](https://www.typescriptlang.org/) | Strict, typed frontend logic (no `any`) |
+| Local database | SQLite ([rusqlite](https://github.com/rusqlite/rusqlite)) | Local application and file search index (`lux.db`) |
+| Package manager | [pnpm](https://pnpm.io/) | Fast, deterministic dependency management |
 
 ## Getting Started
 
-These instructions are intended for developers running Lux from source, not end users looking for a packaged installer.
+> **Developer Notice:** These instructions are for building and running Lux from source during active development. Precompiled installers and release packages will be made available with official milestone releases.
 
 ### Prerequisites
 
-Install the following tools:
+Ensure you have the following installed on your system:
 
-- [Node.js](https://nodejs.org/)
-- [pnpm](https://pnpm.io/)
-- [Rust and Cargo](https://www.rust-lang.org/tools/install)
-- The platform-specific dependencies required by [Tauri 2](https://v2.tauri.app/start/prerequisites/)
+- [Node.js](https://nodejs.org/) (v20+ recommended)
+- [pnpm](https://pnpm.io/) (v9+)
+- [Rust and Cargo](https://www.rust-lang.org/tools/install) (stable toolchain)
+- Platform-specific build prerequisites documented by [Tauri 2](https://v2.tauri.app/start/prerequisites/) (such as Visual Studio C++ Build Tools on Windows, or `libwebkit2gtk` and `libappindicator` on Linux)
 
 ### Clone the Repository
 
@@ -127,64 +131,74 @@ pnpm install
 pnpm tauri dev
 ```
 
-Lux is designed to remain available in the background. Use the configured global shortcut to open the launcher.
+Lux runs in the background. Press <kbd>Alt</kbd> + <kbd>Space</kbd> to display the launcher, or <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd> to open Clipboard History.
 
-### Run Checks
+### Run Verification & Tests
+
+To run the TypeScript and frontend test suites:
 
 ```bash
 pnpm check
+pnpm test
 pnpm build
 ```
 
-Run the relevant Rust checks from the directory containing the applicable `Cargo.toml`:
+To run the Rust backend tests and linter:
 
 ```bash
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
-
-Some checks may depend on your operating system and installed system libraries.
 
 ### Build for Distribution
 
-Packaging and distribution procedures may evolve during early development. Consult the repository's current configuration and documentation before attempting to produce release packages.
+```bash
+pnpm tauri build
+```
 
 ## Roadmap
 
-Planned areas of development include:
+### Completed in Recent Releases
+- [x] Application discovery and launch integration with Administrator execution support
+- [x] Local file and folder indexing with progressive batch loading
+- [x] Category browse modes (Apps, Files, Actions) with back navigation
+- [x] Offline Quick Answers (math, financial VAT/splits, timezones, date math, SI/IEC storage units, colors, passwords)
+- [x] Currency conversion with local 24-hour rate caching and offline fallback
+- [x] Dedicated Clipboard History window with privacy filters (secrets, cards, regex)
+- [x] Customization settings: Information Density, Layout Density, Light/Dark themes, and List/Grid layouts
+- [x] In-app Help & Keyboard Shortcuts guide
 
-- Application discovery and launching.
-- Additional search providers and quick actions.
-- Extensible functionality.
-- Improved Windows and Linux integration.
-- Continued performance and resource-usage improvements.
-- Accessibility and usability refinements.
+### Planned & In Development
+- [ ] Extensible plugin architecture with permission-controlled APIs
+- [ ] Comprehensive Linux desktop environment validation (GNOME, KDE, Wayland/X11)
+- [ ] Web search fallback providers and custom query keyword triggers
+- [ ] Deeper file content and metadata search capabilities
+- [ ] Enhanced accessibility, screen reader support, and full keyboard customization
+- [ ] Automated CI workflows and signed installer packages (.msi, .exe, .AppImage, .deb)
 
-These are development goals, not guarantees that the functionality is already implemented or scheduled for a particular release.
-
-Check the [open issues](https://github.com/ressiws/Lux/issues) for ongoing work and proposed improvements.
+Track active development and contribute ideas in the [Issues](https://github.com/ressiws/Lux/issues) tracker.
 
 ## Contributing
 
-Contributions are welcome, including bug reports, feature proposals, documentation improvements, and code changes.
+Contributions are welcome, including bug reports, feature proposals, documentation improvements, and pull requests.
 
-Before making substantial changes, please discuss the proposed approach with the maintainers.
+Before starting major new work, please open an issue to discuss your proposed approach with the maintainers.
 
-- [Contributing Guide](CONTRIBUTING.md) — development setup, coding guidelines, and pull requests.
-- [Issues Guide](ISSUES.md) — reporting bugs and proposing features.
-- [Security Policy](SECURITY.md) — privately reporting security vulnerabilities.
-- [Agent Guidelines](AGENTS.md) — development rules for AI coding agents.
+- [Contributing Guide](CONTRIBUTING.md) — development workflow, coding standards, and PR guidelines.
+- [Issues Guide](ISSUES.md) — bug reporting templates and feature request criteria.
+- [Security Policy](SECURITY.md) — responsible vulnerability reporting instructions.
+- [Agent Guidelines](AGENTS.md) — mandatory architecture and testing rules for automated and human contributors.
 
-Please keep contributions focused, test relevant changes, and document verification results accurately.
+Please keep contributions focused, include relevant tests, and verify changes across applicable project checks before submitting.
 
 ## License
 
-Lux is distributed under the [MIT License](LICENSE).
+Lux is open-source software licensed under the [MIT License](LICENSE).
 
 The MIT License permits use, modification, distribution, and commercial use, provided that the applicable copyright and license notices are preserved.
 
 ## Acknowledgements
 
-Lux is an independent open-source project inspired by the broader category of desktop launchers, including Spotlight and Raycast.
+Lux is an independent open-source project inspired by the broader ecosystem of keyboard-driven launchers, including Spotlight, Raycast, and Alfred.
 
-Lux is not affiliated with, endorsed by, or sponsored by Apple or Raycast.
+Lux is not affiliated with, endorsed by, or sponsored by Apple Inc. or Raycast Holding Inc.
