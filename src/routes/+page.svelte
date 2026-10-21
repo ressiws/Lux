@@ -950,19 +950,28 @@
   aria-label="Lux command palette"
 >
   <div class="bar" id="bar" data-tauri-drag-region>
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      stroke-linecap="round"
-      aria-hidden="true"
-    >
-      <circle cx="9" cy="9" r="5.5" />
-      <path d="m13.2 13.2 3.3 3.3" />
-    </svg>
+    {#if isIdle}
+      <div class="logo bar-logo" aria-label="Lux">
+        <svg viewBox="0 0 64 64" width="14" height="14" fill="currentColor">
+          <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
+        </svg>
+      </div>
+    {:else}
+      <svg
+        class="search-icon"
+        width="22"
+        height="22"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <circle cx="9" cy="9" r="5.5" />
+        <path d="m13.2 13.2 3.3 3.3" />
+      </svg>
+    {/if}
     {#if prefixResolution.hasPrefix && prefixResolution.prefix}
       <span
         class="prefix-pill"
@@ -1039,6 +1048,8 @@
       <span><kbd>↵</kbd> open</span>
       <span><kbd>Ctrl</kbd><kbd>K</kbd> actions</span>
       <span><kbd>Esc</kbd> close</span>
+      <span class="hk-detail"><kbd>Tab</kbd> switch</span>
+      <span class="hk-detail"><kbd>Alt</kbd><kbd>Space</kbd> hide</span>
     </div>
   </div>
 
@@ -1328,6 +1339,7 @@
       </svg>
     </div>
     <span id="msg">{displayedMessage}</span>
+    <span class="foot-detail"><kbd>↑</kbd><kbd>↓</kbd> Select</span>
     <span class="sp"></span>
     <div
       class="g1"
@@ -1521,6 +1533,11 @@
     user-select: none;
   }
 
+  .win,
+  .win * {
+    box-sizing: border-box;
+  }
+
   .win {
     width: 100vw;
     height: 100vh;
@@ -1540,6 +1557,7 @@
     height: 144px;
     max-height: 144px;
     flex: none;
+    overflow: hidden;
   }
 
   .bar {
@@ -1547,10 +1565,32 @@
     align-items: center;
     gap: 12px;
     height: 68px;
-    padding: 0 18px;
+    padding: 0 20px;
     border-bottom: 1px solid var(--line);
     flex: none;
     position: relative;
+  }
+
+  .bar-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--fg);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+    flex: none;
+  }
+
+  .bar-logo svg {
+    display: block;
+  }
+
+  .bar .search-icon {
+    flex: none;
+    color: var(--mut);
+    width: 22px;
+    height: 22px;
   }
 
   .progress-bar {
@@ -1684,7 +1724,7 @@
 
   .hints {
     display: none;
-    padding: 8px 20px 16px;
+    padding: 10px 20px 16px;
   }
 
   .idle:not(.collapsing) .hints {
@@ -1728,7 +1768,7 @@
   .hk {
     display: flex;
     gap: 16px;
-    margin-top: 12px;
+    margin-top: 10px;
     color: var(--dim);
     font-size: 12px;
     flex-wrap: wrap;
@@ -1738,6 +1778,11 @@
     display: inline-flex;
     gap: 4px;
     align-items: center;
+  }
+
+  .hk-detail,
+  .foot-detail {
+    display: none;
   }
 
   .body {
@@ -1750,7 +1795,7 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
-    padding: 4px 10px 10px;
+    padding: 6px 10px 10px;
     scrollbar-width: thin;
   }
 
@@ -2037,12 +2082,28 @@
     display: flex;
     align-items: center;
     height: 42px;
-    padding: 0 14px;
+    padding: 0 20px 2px;
+    margin-bottom: 2px;
     border-top: 1px solid var(--line);
     gap: 10px;
     color: var(--mut);
     font-size: 12px;
     flex: none;
+    width: 100%;
+  }
+
+  #msg {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #pl {
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .logo {
@@ -2064,6 +2125,7 @@
 
   .foot .sp {
     flex: 1;
+    min-width: 8px;
   }
 
   .k {
@@ -2097,10 +2159,17 @@
     font: inherit;
     padding: 4px 6px;
     border-radius: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .btn:hover {
     background: var(--sel);
+  }
+
+  .g1,
+  .g2 {
+    flex-shrink: 0;
   }
 
   .g1 .btn {
@@ -2131,15 +2200,18 @@
 
   .pop {
     position: absolute;
-    right: 10px;
-    bottom: 48px;
+    right: 20px;
+    bottom: 50px;
     width: 268px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    scrollbar-width: thin;
     background: var(--bg);
     border-radius: 10px;
     box-shadow: var(--shadow);
     padding: 6px;
     display: none;
-    z-index: 4;
+    z-index: 10;
   }
 
   .pop.open {
@@ -2155,10 +2227,23 @@
     color: var(--dim);
     padding: 6px 8px 4px;
     margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .pop .row {
-    height: 34px;
+    height: 34px !important;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  .pop .row .t {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .pop .row.dan .t {
@@ -2176,36 +2261,82 @@
     max-height: 560px;
   }
 
-  /* Information Density: Minimal hides footer keyboard navigation hints and simplifies subtitles */
-  :global(:root[data-info-density="minimal"]) .hr {
+  /* Information Density: Minimal */
+  :global(:root[data-info-density="minimal"]) .win.idle {
+    justify-content: center;
+  }
+
+  :global(:root[data-info-density="minimal"]) .win.idle .hints {
     display: none !important;
   }
 
+  :global(:root[data-info-density="minimal"]) .foot {
+    display: none !important;
+  }
+
+  :global(:root[data-info-density="minimal"]) .pop {
+    bottom: 16px;
+  }
+
   :global(:root[data-info-density="minimal"]) .s {
+    max-width: 200px;
     opacity: 0.6;
   }
 
-  /* Information Density: Detailed emphasizes metadata and hints */
+  :global(:root[data-info-density="minimal"]) .r {
+    opacity: 0.6;
+  }
+
+  /* Information Density: Detailed */
+  :global(:root[data-info-density="detailed"]) .hk-detail,
+  :global(:root[data-info-density="detailed"]) .foot-detail {
+    display: inline-flex;
+  }
+
   :global(:root[data-info-density="detailed"]) .s {
     opacity: 0.9;
   }
 
-  :global(:root[data-info-density="detailed"]) .hr {
-    padding: 12px 18px;
-  }
-
-  /* Layout Density: Compact reduces dimensions, row heights and padding */
+  /* Layout Density: Compact */
   :global(:root[data-layout-density="compact"]) .bar {
     height: 54px;
-    padding: 0 14px;
+    padding: 0 16px;
     gap: 8px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar-logo {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar-logo svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .bar .search-icon {
+    width: 18px;
+    height: 18px;
   }
 
   :global(:root[data-layout-density="compact"]) #q {
     font-size: 18px;
   }
 
-  :global(:root[data-layout-density="compact"]) .row {
+  :global(:root[data-layout-density="compact"]) .gear {
+    padding: 5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .hints {
+    padding: 8px 16px 12px;
+  }
+
+  :global(:root[data-layout-density="compact"]) #list {
+    padding: 4px 8px 8px;
+  }
+
+  :global(:root[data-layout-density="compact"]) #list .row {
     height: 36px;
     padding: 0 8px;
     gap: 8px;
@@ -2214,9 +2345,9 @@
   :global(:root[data-layout-density="compact"]) .ico,
   :global(:root[data-layout-density="compact"]) .ico-img,
   :global(:root[data-layout-density="compact"]) .thumb {
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
   }
 
   :global(:root[data-layout-density="compact"]) .t {
@@ -2227,15 +2358,97 @@
     font-size: 11.5px;
   }
 
-  /* Layout Density: Comfortable provides spacious rows and larger touch/click targets */
-  :global(:root[data-layout-density="comfortable"]) .bar {
-    height: 72px;
-    padding: 0 20px;
+  :global(:root[data-layout-density="compact"]) .foot {
+    height: 38px;
+    padding: 0 16px 2px;
+    font-size: 11.5px;
+    gap: 8px;
+    margin-bottom: 2px;
   }
 
-  :global(:root[data-layout-density="comfortable"]) .row {
+  :global(:root[data-layout-density="compact"]) .foot .logo {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    border-radius: 4px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .foot .logo svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .btn {
+    padding: 3px 5px;
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  :global(:root[data-layout-density="compact"]) kbd {
+    font-size: 10px;
+    padding: 1px 5px;
+    min-width: 18px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .pop {
+    right: 16px;
+    bottom: 44px;
+    width: 250px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .pop .row {
+    height: 30px !important;
+    padding: 0 6px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  :global(:root[data-info-density="minimal"][data-layout-density="compact"]) .pop {
+    bottom: 12px;
+  }
+
+  /* Layout Density: Comfortable */
+  :global(:root[data-layout-density="comfortable"]) .bar {
+    height: 72px;
+    padding: 0 24px;
+    gap: 14px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar-logo svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .bar .search-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) #q {
+    font-size: 24px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .gear {
+    padding: 9px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .hints {
+    padding: 12px 24px 20px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) #list {
+    padding: 8px 12px 12px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) #list .row {
     height: 56px;
-    padding: 0 14px;
+    padding: 0 12px;
     gap: 14px;
   }
 
@@ -2253,5 +2466,53 @@
 
   :global(:root[data-layout-density="comfortable"]) .s {
     font-size: 13px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot {
+    height: 46px;
+    padding: 0 24px 4px;
+    font-size: 13px;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot .logo {
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .foot .logo svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .btn {
+    padding: 5px 8px;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) kbd {
+    font-size: 11.5px;
+    padding: 3px 7px;
+    min-width: 22px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .pop {
+    right: 24px;
+    bottom: 56px;
+    width: 280px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .pop .row {
+    height: 38px !important;
+    padding: 0 10px;
+    gap: 10px;
+  }
+
+  :global(:root[data-info-density="minimal"][data-layout-density="comfortable"]) .pop {
+    bottom: 20px;
   }
 </style>
