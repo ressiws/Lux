@@ -1335,6 +1335,7 @@
   #list {
     flex: 0 0 325px;
     min-width: 0;
+    height: 100%;
     overflow-y: auto;
     padding: 4px 10px 10px;
     scrollbar-width: thin;
@@ -1493,6 +1494,7 @@
   .pv {
     flex: 1;
     min-width: 0;
+    height: 100%;
     border-left: 1px solid var(--line);
     display: flex;
     flex-direction: column;

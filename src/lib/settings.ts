@@ -109,39 +109,16 @@ export async function onSettingsChanged(
 }
 
 export function getIdleLauncherHeight(
-  infoDensity: InformationDensity,
+  _infoDensity: InformationDensity,
   layoutDensity: LayoutDensity,
 ): number {
-  if (infoDensity === "minimal") {
-    switch (layoutDensity) {
-      case "compact":
-        return 78;
-      case "comfortable":
-        return 114;
-      case "normal":
-      default:
-        return 96;
-    }
-  } else if (infoDensity === "detailed") {
-    switch (layoutDensity) {
-      case "compact":
-        return 132;
-      case "comfortable":
-        return 174;
-      case "normal":
-      default:
-        return 152;
-    }
-  } else {
-    // normal info density
-    switch (layoutDensity) {
-      case "compact":
-        return 124;
-      case "comfortable":
-        return 166;
-      case "normal":
-      default:
-        return 144;
-    }
+  switch (layoutDensity) {
+    case "compact":
+      return 52;
+    case "comfortable":
+      return 72;
+    case "normal":
+    default:
+      return 64;
   }
 }

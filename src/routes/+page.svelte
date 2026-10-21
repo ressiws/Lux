@@ -2088,11 +2088,18 @@
   }
 
   :global(html) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
     background: transparent !important;
     background-color: transparent !important;
   }
 
   :global(body) {
+    width: 100%;
+    height: 100%;
     margin: 0;
     padding: 0;
     background: transparent !important;
@@ -2115,8 +2122,8 @@
   }
 
   .win {
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     box-sizing: border-box;
     background: var(--bg);
     -webkit-backdrop-filter: blur(20px);
@@ -2130,8 +2137,8 @@
   }
 
   .win.idle {
+    width: 100%;
     height: 100%;
-    max-height: 100%;
     flex: none;
     overflow: hidden;
   }
@@ -2993,9 +3000,10 @@
   }
 
   .clipboard-win {
+    width: 100%;
     height: 100%;
-    max-height: 100%;
     flex: 1;
+    overflow: hidden;
   }
 
   /* Information Density: Minimal */

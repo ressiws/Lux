@@ -460,7 +460,7 @@ mod win32_backdrop {
                 y,
                 cx,
                 cy,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOZORDER | SWP_NOACTIVATE | 0x0020 | 0x0100,
             );
         }
     }
@@ -481,7 +481,7 @@ pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Resul
 
 pub const LAUNCHER_WIDTH: f64 = 640.0;
 pub const CLIPBOARD_WIDTH: f64 = 760.0;
-pub const LAUNCHER_HEIGHT_IDLE: f64 = 96.0;
+pub const LAUNCHER_HEIGHT_IDLE: f64 = 64.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
 pub const CLIPBOARD_HEIGHT: f64 = 620.0;
 
@@ -597,8 +597,6 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                     target_physical_width as i32,
                     target_physical_height as i32,
                 );
-                IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
-                return Ok(());
             }
             let target_logical = tauri::LogicalSize::new(target_width, target_height);
             let _ = window.set_size(target_logical);
@@ -692,11 +690,8 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                         target_physical_height as i32,
                     );
                 }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = window_clone.set_size(tauri::LogicalSize::new(target_width, target_height));
-                    let _ = window_clone.set_position(end_pos);
-                }
+                let _ = window_clone.set_size(tauri::LogicalSize::new(target_width, target_height));
+                let _ = window_clone.set_position(end_pos);
             } else {
                 let _ = window_clone.set_size(tauri::LogicalSize::new(target_width, target_height));
                 let _ = window_clone.center();
@@ -902,8 +897,9 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .map(|s| s.idle_height())
         .unwrap_or(LAUNCHER_HEIGHT_IDLE);
 
-    // Always position and show the window from its compact state
-    position_window_centered(&window, LAUNCHER_WIDTH, idle_h);
+    // Position and show the window from its compact state for the active mode
+    let target_w = target_window_width(mode);
+    position_window_centered(&window, target_w, idle_h);
 
     if window.is_minimized().unwrap_or(false)
         && let Err(err) = window.unminimize()
@@ -1258,7 +1254,7 @@ mod tests {
 
         // Sequence of height transitions: minimal idle (78, 96, 114), hints idle (124, 144, 166),
         // search (500), clipboard (620), back to minimal idle (96)
-        let heights = [78, 96, 114, 124, 144, 166, 250, 380, 500, 620, 300, 96];
+        let heights = [52, 64, 72, 78, 96, 114, 124, 144, 166, 250, 380, 500, 620, 300, 64];
         for h in heights {
             let size = PhysicalSize::new(760, h);
             let pos = calculate_launcher_position(size, work_pos, work_size);
@@ -1548,7 +1544,7 @@ mod tests {
         let work_pos = PhysicalPosition::new(0, 0);
         let work_size = PhysicalSize::new(1920, 1080);
 
-        let compact_size = PhysicalSize::new(640, 96);
+        let compact_size = PhysicalSize::new(640, 64);
         let clipboard_size = PhysicalSize::new(760, 620);
 
         let compact_pos = calculate_launcher_position(compact_size, work_pos, work_size);
@@ -1556,7 +1552,7 @@ mod tests {
 
         let compact_center_x = compact_pos.x + (640 / 2);
         let clipboard_center_x = clipboard_pos.x + (760 / 2);
-        let compact_center_y = compact_pos.y + (96 / 2);
+        let compact_center_y = compact_pos.y + (64 / 2);
         let clipboard_center_y = clipboard_pos.y + (620 / 2);
 
         assert_eq!(compact_center_x, 1920 / 2);

@@ -144,36 +144,31 @@ console.log("Running Settings and Density unit tests...");
 
 // 8. Idle launcher height calculation across all 9 density combinations
 {
-  // Minimal: Spotlight-inspired compact heights with intentional vertical breathing room
-  assertEqual(getIdleLauncherHeight("minimal", "compact"), 78, "minimal + compact idle height (52px bar + 2x13px breathing room)");
-  assertEqual(getIdleLauncherHeight("minimal", "normal"), 96, "minimal + normal idle height (64px bar + 2x16px breathing room)");
-  assertEqual(getIdleLauncherHeight("minimal", "comfortable"), 114, "minimal + comfortable idle height (72px bar + 2x21px breathing room)");
+  // Compact layout: 52px (exact match to 52px search bar)
+  assertEqual(getIdleLauncherHeight("minimal", "compact"), 52, "minimal + compact idle height matches 52px bar");
+  assertEqual(getIdleLauncherHeight("normal", "compact"), 52, "normal + compact idle height matches 52px bar");
+  assertEqual(getIdleLauncherHeight("detailed", "compact"), 52, "detailed + compact idle height matches 52px bar");
 
-  // Normal: balanced hints layouts
-  assertEqual(getIdleLauncherHeight("normal", "compact"), 124, "normal + compact idle height");
-  assertEqual(getIdleLauncherHeight("normal", "normal"), 144, "normal + normal idle height");
-  assertEqual(getIdleLauncherHeight("normal", "comfortable"), 166, "normal + comfortable idle height");
+  // Normal layout: 64px (exact match to 64px search bar)
+  assertEqual(getIdleLauncherHeight("minimal", "normal"), 64, "minimal + normal idle height matches 64px bar");
+  assertEqual(getIdleLauncherHeight("normal", "normal"), 64, "normal + normal idle height matches 64px bar");
+  assertEqual(getIdleLauncherHeight("detailed", "normal"), 64, "detailed + normal idle height matches 64px bar");
 
-  // Detailed: rich guidance layouts
-  assertEqual(getIdleLauncherHeight("detailed", "compact"), 132, "detailed + compact idle height");
-  assertEqual(getIdleLauncherHeight("detailed", "normal"), 152, "detailed + normal idle height");
-  assertEqual(getIdleLauncherHeight("detailed", "comfortable"), 174, "detailed + comfortable idle height");
+  // Comfortable layout: 72px (exact match to 72px search bar)
+  assertEqual(getIdleLauncherHeight("minimal", "comfortable"), 72, "minimal + comfortable idle height matches 72px bar");
+  assertEqual(getIdleLauncherHeight("normal", "comfortable"), 72, "normal + comfortable idle height matches 72px bar");
+  assertEqual(getIdleLauncherHeight("detailed", "comfortable"), 72, "detailed + comfortable idle height matches 72px bar");
 
-  // Verify minimal is strictly more compact than normal/detailed for every layout density
+  // Verify layout density hierarchy: compact < normal < comfortable
   assertEqual(
-    getIdleLauncherHeight("minimal", "compact") < getIdleLauncherHeight("normal", "compact"),
+    getIdleLauncherHeight("normal", "compact") < getIdleLauncherHeight("normal", "normal"),
     true,
-    "minimal compact is smaller than normal compact",
+    "compact is smaller than normal",
   );
   assertEqual(
-    getIdleLauncherHeight("minimal", "normal") < getIdleLauncherHeight("normal", "normal"),
+    getIdleLauncherHeight("normal", "normal") < getIdleLauncherHeight("normal", "comfortable"),
     true,
-    "minimal normal is smaller than normal normal",
-  );
-  assertEqual(
-    getIdleLauncherHeight("minimal", "comfortable") < getIdleLauncherHeight("normal", "comfortable"),
-    true,
-    "minimal comfortable is smaller than normal comfortable",
+    "normal is smaller than comfortable",
   );
 }
 
