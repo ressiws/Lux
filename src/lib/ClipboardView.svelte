@@ -603,7 +603,7 @@
 
 <div class="clipboard-root" role="dialog" aria-label="Clipboard History">
   <!-- Top search bar -->
-  <div class="bar">
+  <div class="bar" data-tauri-drag-region>
     <svg
       viewBox="0 0 24 24"
       fill="none"

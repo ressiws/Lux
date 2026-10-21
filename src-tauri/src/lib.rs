@@ -192,9 +192,13 @@ pub fn run() {
                 }
             };
 
+            let pos_path = window::get_window_position_path(handle);
+            let saved_position = pos_path.as_deref().and_then(window::load_persisted_position_from_path);
+
             app.manage(LauncherState::new(
                 shortcut_config.launcher.clone(),
                 native_glass_supported,
+                saved_position,
             ));
 
             app.manage(shortcuts::ShortcutsState::new(
@@ -266,6 +270,9 @@ pub fn run() {
                         }
                         _ => {}
                     }
+                }
+                WindowEvent::Moved(pos) => {
+                    window::handle_window_moved(win, *pos);
                 }
                 _ => {}
             }

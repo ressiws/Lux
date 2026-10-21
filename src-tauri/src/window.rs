@@ -1,12 +1,14 @@
+use std::path::{Path, PathBuf};
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow,
+    Window,
 };
 
 use crate::shortcuts::ShortcutStatus;
@@ -29,6 +31,16 @@ pub enum WindowMode {
     Clipboard,
 }
 
+pub const WINDOW_POSITION_FILE: &str = "window_position.json";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistentPosition {
+    pub center_x: i32,
+    pub center_y: i32,
+}
+
+pub static IS_PROGRAMMATIC_MOVING: AtomicBool = AtomicBool::new(false);
+
 pub struct LauncherState {
     shortcut_status: Mutex<ShortcutStatus>,
     native_glass_supported: bool,
@@ -40,10 +52,15 @@ pub struct LauncherState {
     show_on_ready: AtomicBool,
     settings_shown_at: Mutex<Option<Instant>>,
     settings_has_gained_focus: AtomicBool,
+    saved_position: Mutex<Option<PersistentPosition>>,
 }
 
 impl LauncherState {
-    pub fn new(shortcut_status: ShortcutStatus, native_glass_supported: bool) -> Self {
+    pub fn new(
+        shortcut_status: ShortcutStatus,
+        native_glass_supported: bool,
+        saved_position: Option<PersistentPosition>,
+    ) -> Self {
         Self {
             shortcut_status: Mutex::new(shortcut_status),
             native_glass_supported,
@@ -55,7 +72,16 @@ impl LauncherState {
             show_on_ready: AtomicBool::new(false),
             settings_shown_at: Mutex::new(None),
             settings_has_gained_focus: AtomicBool::new(false),
+            saved_position: Mutex::new(saved_position),
         }
+    }
+
+    pub fn saved_position(&self) -> Option<PersistentPosition> {
+        *self.saved_position.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn set_saved_position(&self, pos: Option<PersistentPosition>) {
+        *self.saved_position.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = pos;
     }
 
     pub fn status(&self) -> LauncherStatus {
@@ -400,6 +426,49 @@ pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+pub fn get_window_position_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join(WINDOW_POSITION_FILE))
+}
+
+pub fn load_persisted_position_from_path(path: &Path) -> Option<PersistentPosition> {
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<PersistentPosition>(&content).ok()
+}
+
+pub fn save_persisted_position_to_path(path: &Path, pos: &PersistentPosition) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let data = serde_json::to_string(pos).map_err(|e| e.to_string())?;
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+pub fn handle_window_moved<R: Runtime>(window: &Window<R>, pos: PhysicalPosition<i32>) {
+    if IS_PROGRAMMATIC_MOVING.load(Ordering::SeqCst) {
+        return;
+    }
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    if let Ok(size) = window.outer_size() {
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let center_x = pos.x + (size.width as i32 / 2);
+        let center_y = pos.y + (size.height as i32 / 2);
+        let new_pos = PersistentPosition { center_x, center_y };
+        if let Some(state) = window.app_handle().try_state::<LauncherState>() {
+            state.set_saved_position(Some(new_pos));
+        }
+        if let Some(path) = get_window_position_path(window.app_handle()) {
+            let _ = save_persisted_position_to_path(&path, &new_pos);
+        }
+    }
+}
+
 pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f64) -> Result<(), String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
@@ -413,6 +482,10 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         return Ok(());
     }
 
+    let saved_pos = app
+        .try_state::<LauncherState>()
+        .and_then(|s| s.saved_position());
+
     let width_physical = (LAUNCHER_WIDTH * scale_factor).round() as u32;
     let work_area = resolve_resize_monitor(&window).map(|m| (m.work_area().position, m.work_area().size));
 
@@ -420,7 +493,8 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
     if !window.is_visible().unwrap_or(false) {
         if let Some((work_pos, work_size)) = work_area {
             let target_physical_size = PhysicalSize::new(width_physical, target_physical_height);
-            let target_pos = calculate_launcher_position(target_physical_size, work_pos, work_size);
+            let target_pos = calculate_window_position(target_physical_size, work_pos, work_size, saved_pos);
+            IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = window.hwnd() {
                 win32_backdrop::set_window_rect(
@@ -430,15 +504,19 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                     width_physical as i32,
                     target_physical_height as i32,
                 );
+                IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
                 return Ok(());
             }
             let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
             let _ = window.set_size(target_logical);
             let _ = window.set_position(target_pos);
+            IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
         } else {
+            IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
             let target_logical = tauri::LogicalSize::new(LAUNCHER_WIDTH, target_height);
             let _ = window.set_size(target_logical);
             let _ = window.center();
+            IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
         }
         return Ok(());
     }
@@ -448,6 +526,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
     let start_h = current_physical.height as f64;
     let end_h = target_physical_height as f64;
 
+    IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
         const STEPS: usize = 9;
         const STEP_DELAY_MS: u64 = 16;
@@ -463,7 +542,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
 
             if let Some((work_pos, work_size)) = work_area {
                 let current_size = PhysicalSize::new(width_physical, current_physical_h);
-                let current_pos = calculate_launcher_position(current_size, work_pos, work_size);
+                let current_pos = calculate_window_position(current_size, work_pos, work_size, saved_pos);
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window_clone.hwnd() {
                     win32_backdrop::set_window_rect(
@@ -494,7 +573,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
         if RESIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
             if let Some((work_pos, work_size)) = work_area {
                 let end_size = PhysicalSize::new(width_physical, target_physical_height);
-                let end_pos = calculate_launcher_position(end_size, work_pos, work_size);
+                let end_pos = calculate_window_position(end_size, work_pos, work_size, saved_pos);
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window_clone.hwnd() {
                     win32_backdrop::set_window_rect(
@@ -515,6 +594,7 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                 let _ = window_clone.center();
             }
         }
+        IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
     });
 
     Ok(())
@@ -543,6 +623,60 @@ pub fn calculate_launcher_position(
     PhysicalPosition::new(x, y)
 }
 
+pub fn calculate_window_position(
+    window_size: PhysicalSize<u32>,
+    work_area_pos: PhysicalPosition<i32>,
+    work_area_size: PhysicalSize<u32>,
+    saved_center: Option<PersistentPosition>,
+) -> PhysicalPosition<i32> {
+    match saved_center {
+        Some(saved) => {
+            let raw_x = saved.center_x - (window_size.width as i32 / 2);
+            let raw_y = saved.center_y - (window_size.height as i32 / 2);
+
+            let min_x = work_area_pos.x;
+            let max_x = work_area_pos.x + (work_area_size.width as i32 - window_size.width as i32).max(0);
+            let min_y = work_area_pos.y;
+            let max_y = work_area_pos.y + (work_area_size.height as i32 - window_size.height as i32).max(0);
+
+            let clamped_x = raw_x.clamp(min_x, max_x);
+            let clamped_y = raw_y.clamp(min_y, max_y);
+
+            PhysicalPosition::new(clamped_x, clamped_y)
+        }
+        None => calculate_launcher_position(window_size, work_area_pos, work_area_size),
+    }
+}
+
+pub fn resolve_target_monitor_for_position<R: Runtime>(
+    window: &WebviewWindow<R>,
+    pos: Option<PersistentPosition>,
+) -> Option<Monitor> {
+    if let Some(target) = pos {
+        if let Ok(Some(monitor)) = window.monitor_from_point(target.center_x as f64, target.center_y as f64) {
+            return Some(monitor);
+        }
+
+        if let Ok(monitors) = window.available_monitors()
+            && !monitors.is_empty()
+        {
+            let closest = monitors.into_iter().min_by_key(|m| {
+                let area = m.work_area();
+                let mon_center_x = area.position.x + (area.size.width as i32 / 2);
+                let mon_center_y = area.position.y + (area.size.height as i32 / 2);
+                let dx = (target.center_x - mon_center_x) as i64;
+                let dy = (target.center_y - mon_center_y) as i64;
+                dx * dx + dy * dy
+            });
+            if closest.is_some() {
+                return closest;
+            }
+        }
+    }
+
+    resolve_target_monitor(window)
+}
+
 fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
     #[cfg(target_os = "windows")]
     if let Some((x, y)) = win32_backdrop::get_global_cursor_pos()
@@ -563,10 +697,15 @@ fn resolve_target_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monit
 }
 
 fn resolve_resize_monitor<R: Runtime>(window: &WebviewWindow<R>) -> Option<Monitor> {
+    let saved_pos = window
+        .app_handle()
+        .try_state::<LauncherState>()
+        .and_then(|s| s.saved_position());
+
     if let Ok(Some(monitor)) = window.current_monitor() {
         return Some(monitor);
     }
-    resolve_target_monitor(window)
+    resolve_target_monitor_for_position(window, saved_pos)
 }
 
 pub fn position_window_centered<R: Runtime>(
@@ -579,10 +718,21 @@ pub fn position_window_centered<R: Runtime>(
         (width * scale_factor).round() as u32,
         (height * scale_factor).round() as u32,
     );
-    if let Some(monitor) = resolve_target_monitor(window) {
+    let saved_pos = window
+        .app_handle()
+        .try_state::<LauncherState>()
+        .and_then(|s| s.saved_position());
+
+    if let Some(monitor) = resolve_target_monitor_for_position(window, saved_pos) {
         let work_area = monitor.work_area();
-        let target_pos =
-            calculate_launcher_position(window_physical_size, work_area.position, work_area.size);
+        let target_pos = calculate_window_position(
+            window_physical_size,
+            work_area.position,
+            work_area.size,
+            saved_pos,
+        );
+
+        IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
         #[cfg(target_os = "windows")]
         if let Ok(hwnd) = window.hwnd() {
             win32_backdrop::set_window_rect(
@@ -592,15 +742,19 @@ pub fn position_window_centered<R: Runtime>(
                 window_physical_size.width as i32,
                 window_physical_size.height as i32,
             );
+            IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
             return;
         }
         let target_logical = tauri::LogicalSize::new(width, height);
         let _ = window.set_size(target_logical);
         let _ = window.set_position(target_pos);
+        IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
     } else {
+        IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
         let target_logical = tauri::LogicalSize::new(width, height);
         let _ = window.set_size(target_logical);
         let _ = window.center();
+        IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
     }
 }
 
@@ -985,6 +1139,7 @@ mod tests {
                 error: None,
             },
             true,
+            None,
         );
 
         // Before shown, does not hide (not in an active session)
@@ -1027,6 +1182,7 @@ mod tests {
                 error: None,
             },
             true,
+            None,
         );
 
         // Before shown, does not hide (not in an active session)
@@ -1069,6 +1225,7 @@ mod tests {
                 error: None,
             },
             true,
+            None,
         );
 
         // Default mode is Launcher
@@ -1081,5 +1238,74 @@ mod tests {
         // Resetting shown state restores Launcher mode
         state.reset_shown();
         assert_eq!(state.mode(), WindowMode::Launcher);
+    }
+
+    #[test]
+    fn persistent_position_fallback_matches_centered() {
+        let window_size = PhysicalSize::new(760, 144);
+        let work_pos = PhysicalPosition::new(0, 0);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let default_pos = calculate_launcher_position(window_size, work_pos, work_size);
+        let calculated_pos = calculate_window_position(window_size, work_pos, work_size, None);
+
+        assert_eq!(default_pos, calculated_pos);
+    }
+
+    #[test]
+    fn persistent_position_custom_coordinates_and_clamping() {
+        let work_pos = PhysicalPosition::new(0, 0);
+        let work_size = PhysicalSize::new(1920, 1080);
+
+        let custom_center = PersistentPosition {
+            center_x: 500,
+            center_y: 400,
+        };
+
+        let compact_size = PhysicalSize::new(760, 144);
+        let expanded_size = PhysicalSize::new(760, 500);
+
+        let compact_pos = calculate_window_position(compact_size, work_pos, work_size, Some(custom_center));
+        let expanded_pos = calculate_window_position(expanded_size, work_pos, work_size, Some(custom_center));
+
+        // Horizontal position is anchored to custom_center
+        assert_eq!(compact_pos.x, 500 - (760 / 2));
+        assert_eq!(expanded_pos.x, 500 - (760 / 2));
+
+        // Both compact and expanded share vertical center at 400
+        let compact_center_y = compact_pos.y + (144 / 2);
+        let expanded_center_y = expanded_pos.y + (500 / 2);
+        assert_eq!(compact_center_y, 400);
+        assert_eq!(expanded_center_y, 400);
+        assert_eq!(compact_center_y, expanded_center_y);
+
+        // Off-screen clamp: position way outside top-left
+        let outside_top_left = PersistentPosition {
+            center_x: -1000,
+            center_y: -1000,
+        };
+        let clamped_pos = calculate_window_position(compact_size, work_pos, work_size, Some(outside_top_left));
+        assert_eq!(clamped_pos.x, 0);
+        assert_eq!(clamped_pos.y, 0);
+
+        // Off-screen clamp: position way outside bottom-right
+        let outside_bottom_right = PersistentPosition {
+            center_x: 5000,
+            center_y: 5000,
+        };
+        let clamped_br = calculate_window_position(compact_size, work_pos, work_size, Some(outside_bottom_right));
+        assert_eq!(clamped_br.x, 1920 - 760);
+        assert_eq!(clamped_br.y, 1080 - 144);
+    }
+
+    #[test]
+    fn persistent_position_serialization_roundtrip() {
+        let pos = PersistentPosition {
+            center_x: 800,
+            center_y: 600,
+        };
+        let json = serde_json::to_string(&pos).unwrap();
+        let parsed: PersistentPosition = serde_json::from_str(&json).unwrap();
+        assert_eq!(pos, parsed);
     }
 }

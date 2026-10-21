@@ -949,7 +949,7 @@
   role="dialog"
   aria-label="Lux command palette"
 >
-  <div class="bar" id="bar">
+  <div class="bar" id="bar" data-tauri-drag-region>
     <svg
       width="22"
       height="22"
