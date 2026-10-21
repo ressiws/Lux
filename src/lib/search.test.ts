@@ -198,6 +198,50 @@ export function runSearchIntegrationTests(): number {
     assertEqual(hasFiles, false, "File section excluded when enableFileSearch is false");
   });
 
+  // 9. Test search filter: apps only
+  check(() => {
+    const mockResponse: SearchResponse = {
+      apps: [sampleApp],
+      files: [sampleDoc],
+    };
+    const sections = buildSections("disc", mockResponse, { filter: "apps" });
+    assertEqual(sections.length, 1, "Only apps section");
+    assertEqual(sections[0].category, "app", "Apps section category");
+    assertEqual(sections[0].items[0].name, "Discord", "App match");
+  });
+
+  // 10. Test search filter: files only
+  check(() => {
+    const mockResponse: SearchResponse = {
+      apps: [sampleApp],
+      files: [sampleDoc],
+    };
+    const sections = buildSections("notes", mockResponse, { filter: "files" });
+    assertEqual(sections.length, 1, "Only files section");
+    assertEqual(sections[0].category, "file", "Files section category");
+    assertEqual(sections[0].items[0].name, "notes.txt", "File match");
+  });
+
+  // 11. Test search filter: actions only with query
+  check(() => {
+    const mockResponse: SearchResponse = {
+      apps: [sampleApp],
+      files: [sampleDoc],
+    };
+    const sections = buildSections("theme", mockResponse, { filter: "actions" });
+    assertEqual(sections.length, 1, "Only actions section");
+    assertEqual(sections[0].category, "cmd", "Actions category");
+    assertEqual(sections[0].items[0].name, "Toggle Theme", "Command match");
+  });
+
+  // 12. Test search filter: actions only idle
+  check(() => {
+    const sections = buildSections("", undefined, { filter: "actions" });
+    assertEqual(sections.length, 1, "Actions section present");
+    assertEqual(sections[0].category, "cmd", "Actions category");
+    assertEqual(sections[0].items.length > 0, true, "Available actions populated");
+  });
+
   return passed;
 }
 

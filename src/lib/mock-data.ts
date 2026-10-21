@@ -383,20 +383,106 @@ export function scoreItem(item: LauncherItem, loweredQuery: string): number {
   return haystack.includes(loweredQuery) ? 1 : 0;
 }
 
+export type SearchFilter = "all" | "apps" | "files" | "actions";
+
 export function buildSections(
   rawQuery: string,
   searchResponse?: SearchResponse,
-  options?: { enableFileSearch?: boolean },
+  options?: { enableFileSearch?: boolean; filter?: SearchFilter },
 ): LauncherSection[] {
   const trimmed = rawQuery.trim();
   const lowered = trimmed.toLowerCase();
+  const filter = options?.filter ?? "all";
 
+  const suggestedApps =
+    searchResponse && searchResponse.apps.length > 0
+      ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
+      : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
+
+  // 1. Filter: Apps
+  if (filter === "apps") {
+    if (!trimmed) {
+      return [
+        {
+          category: "app",
+          title: "Suggestions",
+          items: suggestedApps,
+        },
+      ];
+    }
+    if (searchResponse) {
+      return searchResponse.apps.length > 0
+        ? [
+            {
+              category: "app",
+              title: SECTION_TITLES.app,
+              items: searchResponse.apps.map(mapBackendApp),
+            },
+          ]
+        : [];
+    }
+    const matchingApps = MOCK_ITEMS.filter(
+      (item) => item.category === "app" && scoreItem(item, lowered) > 0,
+    );
+    return matchingApps.length > 0
+      ? [
+          {
+            category: "app",
+            title: SECTION_TITLES.app,
+            items: matchingApps,
+          },
+        ]
+      : [];
+  }
+
+  // 2. Filter: Files
+  if (filter === "files") {
+    if (!trimmed) {
+      return [];
+    }
+    if (searchResponse) {
+      return searchResponse.files.length > 0
+        ? [
+            {
+              category: "file",
+              title: SECTION_TITLES.file,
+              items: searchResponse.files.map(mapBackendFile),
+            },
+          ]
+        : [];
+    }
+    const matchingFiles = MOCK_ITEMS.filter(
+      (item) => item.category === "file" && scoreItem(item, lowered) > 0,
+    );
+    return matchingFiles.length > 0
+      ? [
+          {
+            category: "file",
+            title: SECTION_TITLES.file,
+            items: matchingFiles,
+          },
+        ]
+      : [];
+  }
+
+  // 3. Filter: Actions
+  if (filter === "actions") {
+    const matchingCmds = trimmed
+      ? MOCK_COMMANDS.filter((cmd) => scoreItem(cmd, lowered) > 0)
+      : [...MOCK_COMMANDS];
+    return matchingCmds.length > 0
+      ? [
+          {
+            category: "cmd",
+            title: trimmed ? "Actions" : "Available Actions",
+            items: matchingCmds,
+          },
+        ]
+      : [];
+  }
+
+  // 4. Default / All categories
   if (!trimmed) {
-    const suggestedApps =
-      searchResponse && searchResponse.apps.length > 0
-        ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
-        : MOCK_ITEMS.filter((item) => SUGGESTED_APP_NAMES.has(item.name));
-
     return [
       {
         category: "app",
@@ -448,6 +534,17 @@ export function buildSections(
         category: "file",
         title: SECTION_TITLES.file,
         items: searchResponse.files.map(mapBackendFile),
+      });
+    }
+
+    const matchingCmds = MOCK_COMMANDS.filter(
+      (cmd) => scoreItem(cmd, lowered) > 0,
+    );
+    if (matchingCmds.length > 0) {
+      sections.push({
+        category: "cmd",
+        title: SECTION_TITLES.cmd,
+        items: matchingCmds,
       });
     }
   } else {

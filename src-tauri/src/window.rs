@@ -280,7 +280,7 @@ mod win32_backdrop {
     const DWMWA_BORDER_COLOR: u32 = 34;
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 
-    const DWMWCP_DONOTROUND: u32 = 1;
+    const DWMWCP_ROUND: u32 = 2;
     const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
     const DWMSBT_NONE: u32 = 1;
 
@@ -313,7 +313,7 @@ mod win32_backdrop {
             let _ = set_dwm_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
             let _ = set_dwm_u32(hwnd, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED);
-            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+            let _ = set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
             let _ = set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
             let _ = set_dwm_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
 
@@ -427,8 +427,8 @@ pub fn set_native_glass<R: Runtime>(_app: &AppHandle<R>, _enable: bool) -> Resul
     Ok(())
 }
 
-pub const LAUNCHER_WIDTH: f64 = 760.0;
-pub const LAUNCHER_HEIGHT_IDLE: f64 = 144.0;
+pub const LAUNCHER_WIDTH: f64 = 640.0;
+pub const LAUNCHER_HEIGHT_IDLE: f64 = 96.0;
 pub const LAUNCHER_HEIGHT_EXPANDED: f64 = 500.0;
 pub const CLIPBOARD_HEIGHT: f64 = 560.0;
 

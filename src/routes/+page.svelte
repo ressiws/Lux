@@ -34,8 +34,10 @@
     getIdleLauncherHeight,
     loadSettings,
     onSettingsChanged,
+    saveSettings,
     type SettingsState,
   } from "$lib/settings";
+  import type { SearchFilter } from "$lib/mock-data";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { resolvePrefix } from "$lib/prefix";
   import type {
@@ -84,6 +86,7 @@
   let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let isSearching = $state(false);
   let searchBarVisible = $state(false);
+  let activeFilter = $state<SearchFilter>("all");
 
   const prefixResolution = $derived(
     resolvePrefix(
@@ -97,9 +100,13 @@
   const sections = $derived(
     buildSections(effectiveQuery, searchResponse, {
       enableFileSearch: settings.fileSearch,
+      filter: activeFilter,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
+  const showViewSelector = $derived(
+    !isIdle && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+  );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
   );
@@ -113,7 +120,8 @@
     ),
   );
   const showEmptyState = $derived(
-    effectiveQuery.trim().length > 0 && hasOnlyFallbackSections(sections),
+    effectiveQuery.trim().length > 0 &&
+      (flatItems.length === 0 || hasOnlyFallbackSections(sections)),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
 
@@ -235,7 +243,26 @@
     focusSearchInput();
   }
 
+  function toggleFilter(filter: "apps" | "files" | "actions"): void {
+    if (activeFilter === filter) {
+      activeFilter = "all";
+    } else {
+      activeFilter = filter;
+    }
+    selectedIndex = 0;
+    selectedActionIndex = 0;
+    actionsOpen = false;
+    focusSearchInput();
+  }
+
+  function setLayout(layout: "list" | "grid"): void {
+    settings = { ...settings, layout };
+    saveSettings(settings);
+    focusSearchInput();
+  }
+
   function resetLauncherState(shouldFocus: boolean): void {
+    activeFilter = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
     query = "";
@@ -522,6 +549,24 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     const count = flatItems.length;
+
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+      if (event.key === "1") {
+        event.preventDefault();
+        toggleFilter("apps");
+        return;
+      }
+      if (event.key === "2") {
+        event.preventDefault();
+        toggleFilter("files");
+        return;
+      }
+      if (event.key === "3") {
+        event.preventDefault();
+        toggleFilter("actions");
+        return;
+      }
+    }
 
     if (
       (event.ctrlKey || event.metaKey) &&
@@ -1003,32 +1048,151 @@
       oninput={handleQueryInput}
       autocomplete="off"
       spellcheck="false"
-      placeholder="Search apps, files, commands…"
+      placeholder="Search Anything…"
       aria-label="Search"
     />
     <div class="spin" aria-hidden="true"></div>
-    <button
-      class="gear"
-      id="gear"
-      type="button"
-      aria-label="Open Lux settings"
-      onmousedown={preventFocusLossOnMouseDown}
-      onclick={handleOpenSettings}
-    >
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 20 20"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.6"
-        stroke-linecap="round"
+
+    {#if showViewSelector}
+      <div class="view-selector" role="radiogroup" aria-label="Results view">
+        <button
+          type="button"
+          class="view-btn"
+          class:active={settings.layout === "list"}
+          role="radio"
+          aria-checked={settings.layout === "list"}
+          title="List view"
+          aria-label="List view"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => setLayout("list")}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="view-btn"
+          class:active={settings.layout === "grid"}
+          role="radio"
+          aria-checked={settings.layout === "grid"}
+          title="Grid view"
+          aria-label="Grid view"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => setLayout("grid")}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        </button>
+      </div>
+      <div class="bar-divider" aria-hidden="true"></div>
+    {/if}
+
+    <div class="filter-group" role="toolbar" aria-label="Search filters">
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "apps"}
+        aria-pressed={activeFilter === "apps"}
+        title="Search Applications (Ctrl+1)"
+        aria-label="Filter: Applications"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("apps")}
       >
-        <path d="M3 6h7M14 6h3M3 14h3M10 14h7" />
-        <circle cx="12" cy="6" r="2" />
-        <circle cx="8" cy="14" r="2" />
-      </svg>
-    </button>
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <path d="M3 9h18M9 21V9" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "files"}
+        aria-pressed={activeFilter === "files"}
+        title="Search Files (Ctrl+2)"
+        aria-label="Filter: Files and Folders"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("files")}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="filter-btn"
+        class:active={activeFilter === "actions"}
+        aria-pressed={activeFilter === "actions"}
+        title="Search Actions (Ctrl+3)"
+        aria-label="Filter: Actions and Commands"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={() => toggleFilter("actions")}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+        </svg>
+      </button>
+    </div>
     {#if isIndexing && settings.progressBar}
       <div class="progress-bar indexing-bar" aria-hidden="true" title="Indexing applications and files…">
         <div class="progress-bar-fill indexing-fill"></div>
@@ -1041,33 +1205,7 @@
     {/if}
   </div>
 
-  <div class="hints" id="hints">
-    <div class="hr">
-      Try
-      <button
-        type="button"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => setQuery("Firefox")}
-      >
-        Firefox
-      </button>
-      <button
-        type="button"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => setQuery("25 EUR to USD")}
-      >
-        25 EUR to USD
-      </button>
-    </div>
-    <div class="hk">
-      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
-      <span><kbd>↵</kbd> open</span>
-      <span><kbd>Ctrl</kbd><kbd>K</kbd> actions</span>
-      <span><kbd>Esc</kbd> close</span>
-      <span class="hk-detail"><kbd>Tab</kbd> switch</span>
-      <span class="hk-detail"><kbd>Alt</kbd><kbd>Space</kbd> hide</span>
-    </div>
-  </div>
+
 
   <div class="body">
     <div id="list" role="listbox" aria-label="Results" bind:this={listContainer}>
@@ -1085,8 +1223,18 @@
             <circle cx="11" cy="11" r="6.5" />
             <path d="m16 16 4 4M9 11h4" />
           </svg>
-          <div class="t">No results for “{effectiveQuery.trim()}”</div>
-          <p>Check the spelling, or try one of these.</p>
+          <div class="t">
+            {#if activeFilter === "apps"}
+              No applications for “{effectiveQuery.trim()}”
+            {:else if activeFilter === "files"}
+              No files for “{effectiveQuery.trim()}”
+            {:else if activeFilter === "actions"}
+              No actions for “{effectiveQuery.trim()}”
+            {:else}
+              No results for “{effectiveQuery.trim()}”
+            {/if}
+          </div>
+          <p>Check the spelling, or try another search.</p>
         </div>
       {/if}
 
@@ -1721,30 +1869,87 @@
     }
   }
 
-  .gear {
-    background: none;
-    border: 0;
-    color: var(--mut);
-    padding: 7px;
-    border-radius: 8px;
-    cursor: pointer;
-    display: grid;
-    place-items: center;
+  .view-selector {
+    display: inline-flex;
+    align-items: center;
+    background: var(--chip);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
     flex: none;
   }
 
-  .gear:hover {
-    background: var(--sel);
+  .view-btn {
+    border: none;
+    background: transparent;
+    color: var(--mut);
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .view-btn:hover {
     color: var(--fg);
   }
 
-  .hints {
-    display: none;
-    padding: 10px 20px 16px;
+  .view-btn.active {
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 
-  .idle:not(.collapsing) .hints {
-    display: block;
+  .bar-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--line);
+    margin: 0 4px;
+    flex: none;
+  }
+
+  .filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+  }
+
+  .filter-btn {
+    border: none;
+    background: transparent;
+    color: var(--mut);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .filter-btn:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .filter-btn.active {
+    background: var(--sel);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .view-btn,
+    .filter-btn {
+      transition: none !important;
+    }
   }
 
   .idle:not(.collapsing) .body,
@@ -1756,47 +1961,6 @@
     border-bottom-color: transparent;
   }
 
-  .hr {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    color: var(--dim);
-    font-size: 12.5px;
-    flex-wrap: wrap;
-  }
-
-  .hr button {
-    font: inherit;
-    font-size: 12.5px;
-    color: var(--mut);
-    background: var(--chip);
-    border: 0;
-    border-radius: 6px;
-    padding: 3px 9px;
-    cursor: pointer;
-  }
-
-  .hr button:hover {
-    background: var(--sel);
-    color: var(--fg);
-  }
-
-  .hk {
-    display: flex;
-    gap: 16px;
-    margin-top: 10px;
-    color: var(--dim);
-    font-size: 12px;
-    flex-wrap: wrap;
-  }
-
-  .hk span {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .hk-detail,
   .foot-detail {
     display: none;
   }
@@ -2287,9 +2451,7 @@
     border-bottom: 0;
   }
 
-  :global(:root[data-info-density="minimal"]) .win.idle .hints {
-    display: none !important;
-  }
+
 
   :global(:root[data-info-density="minimal"]) .foot {
     display: none !important;
@@ -2309,7 +2471,6 @@
   }
 
   /* Information Density: Detailed */
-  :global(:root[data-info-density="detailed"]) .hk-detail,
   :global(:root[data-info-density="detailed"]) .foot-detail {
     display: inline-flex;
   }
@@ -2345,13 +2506,7 @@
     font-size: 18px;
   }
 
-  :global(:root[data-layout-density="compact"]) .gear {
-    padding: 5px;
-  }
 
-  :global(:root[data-layout-density="compact"]) .hints {
-    padding: 8px 16px 12px;
-  }
 
   :global(:root[data-layout-density="compact"]) #list {
     padding: 4px 8px 8px;
@@ -2455,13 +2610,7 @@
     font-size: 24px;
   }
 
-  :global(:root[data-layout-density="comfortable"]) .gear {
-    padding: 9px;
-  }
 
-  :global(:root[data-layout-density="comfortable"]) .hints {
-    padding: 12px 24px 20px;
-  }
 
   :global(:root[data-layout-density="comfortable"]) #list {
     padding: 8px 12px 12px;
