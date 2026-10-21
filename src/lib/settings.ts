@@ -1,10 +1,12 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type SettingsCategory = "general" | "appearance" | "search" | "features" | "shortcuts";
+export type InterfaceStyle = "minimal" | "normal" | "detailed";
 
 export interface SettingsState {
   theme: "system" | "light" | "dark";
   layout: "list" | "grid";
+  interfaceStyle: InterfaceStyle;
   preview: boolean;
   login: boolean;
   progressBar: boolean;
@@ -18,6 +20,7 @@ export interface SettingsState {
 export const DEFAULT_SETTINGS: SettingsState = {
   theme: "system",
   layout: "list",
+  interfaceStyle: "normal",
   preview: true,
   login: false,
   progressBar: true,
@@ -65,6 +68,7 @@ export function applyThemeAndCaret(settings: SettingsState): void {
   } else {
     root.dataset.theme = settings.theme;
   }
+  root.dataset.style = settings.interfaceStyle || "normal";
   root.style.setProperty(
     "--caret-color",
     settings.caret ? "var(--fg)" : "transparent",

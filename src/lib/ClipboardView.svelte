@@ -1686,4 +1686,67 @@
     color: var(--dim);
     padding: 6px 8px 4px;
   }
+
+  /* Minimal Style */
+  :global(:root[data-style="minimal"]) .bar {
+    height: 52px;
+    padding: 0 14px;
+    gap: 8px;
+  }
+
+  :global(:root[data-style="minimal"]) #q {
+    font-size: 18px;
+  }
+
+  :global(:root[data-style="minimal"]) .row {
+    height: 36px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  :global(:root[data-style="minimal"]) .ico,
+  :global(:root[data-style="minimal"]) .thumb,
+  :global(:root[data-style="minimal"]) .sw {
+    width: 22px;
+    height: 22px;
+  }
+
+  :global(:root[data-style="minimal"]) .t {
+    font-size: 13px;
+  }
+
+  :global(:root[data-style="minimal"]) .s {
+    font-size: 11.5px;
+  }
+
+  :global(:root[data-style="minimal"]) .foot {
+    display: none !important;
+  }
+
+  /* Detailed Style */
+  :global(:root[data-style="detailed"]) .bar {
+    height: 70px;
+    padding: 0 20px;
+  }
+
+  :global(:root[data-style="detailed"]) .row {
+    height: 56px;
+    padding: 0 14px;
+    gap: 14px;
+  }
+
+  :global(:root[data-style="detailed"]) .ico,
+  :global(:root[data-style="detailed"]) .thumb,
+  :global(:root[data-style="detailed"]) .sw {
+    width: 36px;
+    height: 36px;
+  }
+
+  :global(:root[data-style="detailed"]) .t {
+    font-size: 15px;
+  }
+
+  :global(:root[data-style="detailed"]) .s {
+    font-size: 13px;
+  }
 </style>

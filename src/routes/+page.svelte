@@ -2176,4 +2176,73 @@
     max-height: 560px;
   }
 
+  /* Minimal Style: Compact single-line results, no footer noise, maximum information density */
+  :global(:root[data-style="minimal"]) .bar {
+    height: 54px;
+    padding: 0 14px;
+    gap: 8px;
+  }
+
+  :global(:root[data-style="minimal"]) #q {
+    font-size: 18px;
+  }
+
+  :global(:root[data-style="minimal"]) .row {
+    height: 36px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  :global(:root[data-style="minimal"]) .ico,
+  :global(:root[data-style="minimal"]) .ico-img,
+  :global(:root[data-style="minimal"]) .thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+  }
+
+  :global(:root[data-style="minimal"]) .t {
+    font-size: 13px;
+  }
+
+  :global(:root[data-style="minimal"]) .s {
+    font-size: 11.5px;
+  }
+
+  :global(:root[data-style="minimal"]) .hr {
+    display: none !important;
+  }
+
+  /* Detailed Style: Richer metadata, larger touch/click targets, full status information */
+  :global(:root[data-style="detailed"]) .bar {
+    height: 72px;
+    padding: 0 20px;
+  }
+
+  :global(:root[data-style="detailed"]) .row {
+    height: 56px;
+    padding: 0 14px;
+    gap: 14px;
+  }
+
+  :global(:root[data-style="detailed"]) .ico,
+  :global(:root[data-style="detailed"]) .ico-img,
+  :global(:root[data-style="detailed"]) .thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+  }
+
+  :global(:root[data-style="detailed"]) .t {
+    font-size: 15px;
+  }
+
+  :global(:root[data-style="detailed"]) .s {
+    font-size: 13px;
+    opacity: 0.85;
+  }
+
+  :global(:root[data-style="detailed"]) .hr {
+    padding: 12px 18px;
+  }
 </style>

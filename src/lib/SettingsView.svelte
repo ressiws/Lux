@@ -535,6 +535,43 @@
       </div>
       <div class="srow">
         <div>
+          <b>Interface Style</b>
+          <small>
+            {#if settings.interfaceStyle === "minimal"}
+              Compact single-line items, no footer noise, maximum density
+            {:else if settings.interfaceStyle === "detailed"}
+              Richer metadata, larger touch targets, full status information
+            {:else}
+              Balanced layout with standard spacing and previews
+            {/if}
+          </small>
+        </div>
+        <div class="seg" role="group" aria-label="Interface Style">
+          <button
+            type="button"
+            aria-pressed={settings.interfaceStyle === "minimal"}
+            onclick={() => setSetting("interfaceStyle", "minimal")}
+          >
+            Minimal
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.interfaceStyle === "normal"}
+            onclick={() => setSetting("interfaceStyle", "normal")}
+          >
+            Normal
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.interfaceStyle === "detailed"}
+            onclick={() => setSetting("interfaceStyle", "detailed")}
+          >
+            Detailed
+          </button>
+        </div>
+      </div>
+      <div class="srow">
+        <div>
           <b>Text Caret</b>
           <small>Show blinking cursor in search bar</small>
         </div>
@@ -1664,5 +1701,45 @@
   .btn-sm {
     padding: 3px 8px;
     font-size: 11px;
+  }
+
+  /* Minimal Style */
+  :global(:root[data-style="minimal"]) .srow {
+    padding: 8px 4px;
+    gap: 10px;
+  }
+
+  :global(:root[data-style="minimal"]) .stb {
+    height: 38px;
+    padding: 0 14px;
+  }
+
+  :global(:root[data-style="minimal"]) .set-tabs button {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  /* Detailed Style */
+  :global(:root[data-style="detailed"]) .srow {
+    padding: 16px 6px;
+    gap: 20px;
+  }
+
+  :global(:root[data-style="detailed"]) .srow b {
+    font-size: 14px;
+  }
+
+  :global(:root[data-style="detailed"]) .srow small {
+    font-size: 12.5px;
+  }
+
+  :global(:root[data-style="detailed"]) .stb {
+    height: 52px;
+    padding: 0 20px;
+  }
+
+  :global(:root[data-style="detailed"]) .set-tabs button {
+    padding: 8px 16px;
+    font-size: 13.5px;
   }
 </style>
