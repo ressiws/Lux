@@ -273,6 +273,7 @@
   let lastSyncedHeight: number | undefined;
 
   async function syncWindowHeight(expanded: boolean): Promise<void> {
+    if (appMode === "clipboard") return;
     const targetHeight = expanded ? 500 : currentIdleHeight;
     if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
     windowExpanded = expanded;
@@ -1104,7 +1105,9 @@
         say("Clipboard History is disabled in Settings");
         return;
       }
-      void switchMode("clipboard");
+      appMode = "clipboard";
+      actionsOpen = false;
+      void setWindowHeight(560);
     }).then((unlisten) => {
       if (disposed) {
         unlisten();

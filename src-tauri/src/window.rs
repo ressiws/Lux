@@ -31,6 +31,7 @@ pub enum WindowMode {
     Clipboard,
 }
 
+pub const TOGGLE_COOLDOWN_MS: u128 = 100;
 pub const WINDOW_POSITION_FILE: &str = "window_position.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +55,8 @@ pub struct LauncherState {
     settings_has_gained_focus: AtomicBool,
     saved_position: Mutex<Option<PersistentPosition>>,
     idle_height: Mutex<f64>,
+    last_toggle_instant: Mutex<Option<Instant>>,
+    last_settings_toggle_instant: Mutex<Option<Instant>>,
 }
 
 impl LauncherState {
@@ -75,6 +78,8 @@ impl LauncherState {
             settings_has_gained_focus: AtomicBool::new(false),
             saved_position: Mutex::new(saved_position),
             idle_height: Mutex::new(LAUNCHER_HEIGHT_IDLE),
+            last_toggle_instant: Mutex::new(None),
+            last_settings_toggle_instant: Mutex::new(None),
         }
     }
 
@@ -94,6 +99,42 @@ impl LauncherState {
 
     pub fn set_saved_position(&self, pos: Option<PersistentPosition>) {
         *self.saved_position.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = pos;
+    }
+
+    pub fn try_acquire_toggle_cooldown(&self) -> bool {
+        let mut guard = self
+            .last_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(last) = *guard {
+            if last.elapsed().as_millis() < TOGGLE_COOLDOWN_MS {
+                return false;
+            }
+        }
+        *guard = Some(Instant::now());
+        true
+    }
+
+    pub fn try_acquire_settings_toggle_cooldown(&self) -> bool {
+        let mut guard = self
+            .last_settings_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(last) = *guard {
+            if last.elapsed().as_millis() < TOGGLE_COOLDOWN_MS {
+                return false;
+            }
+        }
+        *guard = Some(Instant::now());
+        true
+    }
+
+    pub fn cancel_toggle_cooldown(&self) {
+        let mut guard = self
+            .last_toggle_instant
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
     }
 
     pub fn status(&self) -> LauncherStatus {
@@ -437,6 +478,11 @@ pub const SETTINGS_WIDTH: f64 = 480.0;
 pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 static RESIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn cancel_resize_animation() {
+    RESIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
+}
+
 
 pub fn get_window_position_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join(WINDOW_POSITION_FILE))
@@ -540,6 +586,14 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
 
     IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
+        struct MovingGuard;
+        impl Drop for MovingGuard {
+            fn drop(&mut self) {
+                IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _moving_guard = MovingGuard;
+
         const STEPS: usize = 9;
         const STEP_DELAY_MS: u64 = 16;
 
@@ -606,7 +660,6 @@ pub fn set_window_target_height<R: Runtime>(app: &AppHandle<R>, target_height: f
                 let _ = window_clone.center();
             }
         }
-        IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
     });
 
     Ok(())
@@ -777,6 +830,8 @@ pub fn position_on_active_monitor<R: Runtime>(window: &WebviewWindow<R>, target_
 }
 
 pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    cancel_resize_animation();
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -832,6 +887,8 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
 }
 
 pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    cancel_resize_animation();
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -840,17 +897,18 @@ pub fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         state.reset_shown();
     }
 
-    let _ = set_launcher_height(app, false);
-
     if let Err(err) = window.emit(EVENT_LAUNCHER_HIDDEN, ()) {
         eprintln!("Warning: failed to emit launcher-hidden event: {err}");
     }
 
-    window
+    let hide_res = window
         .hide()
-        .map_err(|err| format!("Failed to hide launcher window: {err}"))?;
+        .map_err(|err| format!("Failed to hide launcher window: {err}"));
 
-    Ok(())
+    // Snap to idle height immediately now that the window is hidden, without any animation
+    let _ = set_launcher_height(app, false);
+
+    hide_res
 }
 
 pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool) {
@@ -912,6 +970,7 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .ok_or_else(|| "Settings window is not available.".to_string())?;
 
     if let Some(state) = app.try_state::<LauncherState>() {
+        let _ = state.try_acquire_settings_toggle_cooldown();
         state.record_settings_shown();
     }
 
@@ -998,6 +1057,12 @@ pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: boo
 }
 
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        if !state.try_acquire_toggle_cooldown() {
+            return Ok(());
+        }
+    }
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main launcher window is not available.".to_string())?;
@@ -1037,6 +1102,12 @@ pub fn toggle_clipboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
         .unwrap_or(true);
     if !clipboard_enabled {
         return Err("Clipboard History is disabled in Settings.".to_string());
+    }
+
+    if let Some(state) = app.try_state::<LauncherState>() {
+        if !state.try_acquire_toggle_cooldown() {
+            return Ok(());
+        }
     }
 
     let window = app
@@ -1354,5 +1425,55 @@ mod tests {
         let json = serde_json::to_string(&pos).unwrap();
         let parsed: PersistentPosition = serde_json::from_str(&json).unwrap();
         assert_eq!(pos, parsed);
+    }
+    #[test]
+    fn test_cooldown_mechanism_blocks_rapid_sub_100ms_toggles() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt+Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+            None,
+        );
+
+        // First attempt succeeds
+        assert!(state.try_acquire_toggle_cooldown());
+
+        // Immediate sub-100ms attempt is blocked
+        assert!(!state.try_acquire_toggle_cooldown(), "Sub-100ms toggle must be debounced");
+
+        // After cooldown is canceled/cleared, it succeeds again
+        state.cancel_toggle_cooldown();
+        assert!(state.try_acquire_toggle_cooldown());
+    }
+
+    #[test]
+    fn test_settings_cooldown_mechanism_blocks_rapid_toggles() {
+        let state = LauncherState::new(
+            ShortcutStatus {
+                shortcut: "Alt+Space".to_string(),
+                registered: true,
+                error: None,
+            },
+            true,
+            None,
+        );
+
+        assert!(state.try_acquire_settings_toggle_cooldown());
+        assert!(!state.try_acquire_settings_toggle_cooldown(), "Sub-100ms settings toggle must be debounced");
+    }
+
+    #[test]
+    fn test_cancel_resize_animation_bumps_generation() {
+        let gen_before = RESIZE_GENERATION.load(Ordering::SeqCst);
+        IS_PROGRAMMATIC_MOVING.store(true, Ordering::SeqCst);
+
+        cancel_resize_animation();
+
+        let gen_after = RESIZE_GENERATION.load(Ordering::SeqCst);
+        assert!(gen_after > gen_before, "Generation must increment to cancel animations");
+        assert!(!IS_PROGRAMMATIC_MOVING.load(Ordering::SeqCst), "Programmatic moving flag must reset");
     }
 }

@@ -171,6 +171,25 @@ fn should_show_on_startup() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let build_result = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(settings_win) = app.get_webview_window(window::SETTINGS_WINDOW_LABEL) {
+                if settings_win.is_visible().unwrap_or(false) {
+                    let _ = settings_win.unminimize();
+                    let _ = settings_win.set_focus();
+                    return;
+                }
+            }
+
+            if let Some(state) = app.try_state::<window::LauncherState>() {
+                if state.mode() == window::WindowMode::Clipboard {
+                    let _ = window::show_launcher_window(app);
+                } else {
+                    let _ = window::show_launcher_window_explicit(app);
+                }
+            } else {
+                let _ = window::show_launcher_window_explicit(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
