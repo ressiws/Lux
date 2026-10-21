@@ -523,6 +523,7 @@
 
   async function triggerReindex(): Promise<void> {
     isIndexing = true;
+    browseCache.clear();
     say("Indexing applications and files…");
     try {
       await reindex();
@@ -1036,6 +1037,9 @@
     void getIndexStats()
       .then((stats) => {
         indexStats = stats;
+        if (typeof stats.isIndexing === "boolean") {
+          isIndexing = stats.isIndexing;
+        }
       })
       .catch(() => {});
 
@@ -1122,14 +1126,16 @@
 
     void onIndexingStatus((payload) => {
       isIndexing = payload.isIndexing;
-      if (!payload.isIndexing && activeFilter !== "all") {
-        void loadBrowseData(activeFilter);
-      }
       if (!payload.isIndexing) {
+        browseCache.clear();
+        if (activeFilter !== "all") {
+          void loadBrowseData(activeFilter);
+        }
         indexStats = {
           totalApps: payload.totalApps,
           totalFiles: payload.totalFiles,
           isIndexed: true,
+          isIndexing: false,
         };
         void performSearch(query);
       }

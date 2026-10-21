@@ -112,6 +112,7 @@ struct IndexStats {
     total_apps: usize,
     total_files: usize,
     is_indexed: bool,
+    is_indexing: bool,
 }
 
 #[tauri::command]
@@ -121,6 +122,7 @@ fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
         total_apps: guard.apps.len(),
         total_files: guard.files.len(),
         is_indexed: guard.is_indexed,
+        is_indexing: state.is_indexing(),
     }
 }
 
@@ -261,8 +263,31 @@ pub fn run() {
             app.manage(clipboard_state);
 
             let search_state = search::SearchState::new();
+            let index_path = search::get_search_index_path(handle);
+            let home_dir = search::get_user_home_dir();
+            let current_fingerprint = search::compute_discovery_fingerprint(&home_dir);
+
+            let mut needs_background_reindex = true;
+
+            if let Some(ref path) = index_path {
+                if let Some(persisted) = search::load_persisted_index_from_path(path) {
+                    let up_to_date = persisted.is_up_to_date(&current_fingerprint);
+                    if let Ok(mut lock) = search_state.index.write() {
+                        lock.apps = persisted.apps;
+                        lock.files = persisted.files;
+                        lock.is_indexed = true;
+                    }
+                    if up_to_date {
+                        needs_background_reindex = false;
+                    }
+                }
+            }
+
             app.manage(search_state);
-            search::start_background_indexing(handle.clone());
+
+            if needs_background_reindex {
+                search::start_background_indexing(handle.clone());
+            }
 
             if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
                 && let Some(state) = handle.try_state::<LauncherState>()

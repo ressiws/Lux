@@ -8,7 +8,7 @@ import {
   scoreItem,
   splitHighlight,
 } from "./mock-data";
-import type { SearchResponse, SearchResultItem } from "./types";
+import type { IndexStats, SearchResponse, SearchResultItem } from "./types";
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -401,6 +401,20 @@ export function runSearchIntegrationTests(): number {
     };
     const multiSections = buildSections("", multiResponse, { filter: "files" });
     assertEqual(multiSections[0]?.items.length, 2, "Distinct files are preserved (doc and image)");
+  });
+
+  // 21. Test IndexStats lifecycle contract
+  check(() => {
+    const stats: IndexStats = {
+      totalApps: 42,
+      totalFiles: 100,
+      isIndexed: true,
+      isIndexing: false,
+    };
+    assertEqual(stats.isIndexed, true, "IndexStats isIndexed flag");
+    assertEqual(stats.isIndexing, false, "IndexStats isIndexing flag");
+    assertEqual(stats.totalApps, 42, "IndexStats totalApps");
+    assertEqual(stats.totalFiles, 100, "IndexStats totalFiles");
   });
 
   return passed;

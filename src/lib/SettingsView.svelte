@@ -335,6 +335,9 @@
     void getIndexStats()
       .then((stats) => {
         indexStats = stats;
+        if (typeof stats.isIndexing === "boolean") {
+          isIndexing = stats.isIndexing;
+        }
       })
       .catch(() => {});
 
@@ -352,6 +355,9 @@
       void getIndexStats()
         .then((stats) => {
           indexStats = stats;
+          if (typeof stats.isIndexing === "boolean") {
+            isIndexing = stats.isIndexing;
+          }
         })
         .catch(() => {});
     }).then((unlisten) => {
