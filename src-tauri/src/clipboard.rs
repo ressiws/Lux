@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub const EVENT_CLIPBOARD_UPDATED: &str = "lux://clipboard-updated";
 pub const DEFAULT_MAX_CLIPBOARD_ENTRIES: usize = 100;
@@ -44,6 +44,10 @@ pub struct ClipboardEntry {
     pub color_hex: Option<String>,
     pub color_rgb: Option<String>,
     pub color_hsl: Option<String>,
+    #[serde(default)]
+    pub is_filtered: bool,
+    #[serde(default)]
+    pub matched_filter: Option<String>,
 }
 
 fn current_timestamp_ms() -> i64 {
@@ -241,7 +245,15 @@ impl ClipboardHistory {
     }
 
     pub fn list(&self) -> Vec<ClipboardEntry> {
-        self.entries.clone()
+        self.entries.iter().filter(|e| !e.is_filtered).cloned().collect()
+    }
+
+    pub fn list_filtered(&self) -> Vec<ClipboardEntry> {
+        self.entries.iter().filter(|e| e.is_filtered).cloned().collect()
+    }
+
+    pub fn set_last_content_hash(&mut self, hash: u64) {
+        self.last_content_hash = Some(hash);
     }
 
     pub fn get(&self, id: &str) -> Option<ClipboardEntry> {
@@ -249,6 +261,25 @@ impl ClipboardHistory {
     }
 
     pub fn add_text(&mut self, text: String, app_source: Option<String>) -> Option<ClipboardEntry> {
+        self.add_text_internal(text, app_source, false, None)
+    }
+
+    pub fn add_text_filtered(
+        &mut self,
+        text: String,
+        app_source: Option<String>,
+        matched_filter: String,
+    ) -> Option<ClipboardEntry> {
+        self.add_text_internal(text, app_source, true, Some(matched_filter))
+    }
+
+    fn add_text_internal(
+        &mut self,
+        text: String,
+        app_source: Option<String>,
+        is_filtered: bool,
+        matched_filter: Option<String>,
+    ) -> Option<ClipboardEntry> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return None;
@@ -295,6 +326,8 @@ impl ClipboardHistory {
                 color_hex: Some(upper_hex),
                 color_rgb,
                 color_hsl,
+                is_filtered,
+                matched_filter: matched_filter.clone(),
             }
         } else if is_url(trimmed) {
             let domain = extract_domain(trimmed);
@@ -319,6 +352,8 @@ impl ClipboardHistory {
                 color_hex: None,
                 color_rgb: None,
                 color_hsl: None,
+                is_filtered,
+                matched_filter: matched_filter.clone(),
             }
         } else {
             let candidate_path = trimmed.trim_matches('"').trim_matches('\'');
@@ -362,6 +397,8 @@ impl ClipboardHistory {
                     color_hex: None,
                     color_rgb: None,
                     color_hsl: None,
+                    is_filtered,
+                    matched_filter: matched_filter.clone(),
                 }
             } else {
                 let char_count = trimmed.chars().count();
@@ -387,6 +424,8 @@ impl ClipboardHistory {
                     color_hex: None,
                     color_rgb: None,
                     color_hsl: None,
+                    is_filtered,
+                    matched_filter,
                 }
             }
         };
@@ -441,6 +480,8 @@ impl ClipboardHistory {
             color_hex: None,
             color_rgb: None,
             color_hsl: None,
+            is_filtered: false,
+            matched_filter: None,
         };
 
         self.entries.insert(0, entry.clone());
@@ -640,10 +681,33 @@ pub fn start_clipboard_monitor<R: Runtime>(
                 if let Ok(text) = clipboard.get_text() {
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
+                        let hash = hash_bytes(trimmed.as_bytes());
+                        let filter_match = app
+                            .try_state::<crate::clipboard_filters::ClipboardFiltersState>()
+                            .and_then(|fs| fs.matches(trimmed));
+
                         let mut hist = match state.lock() {
                             Ok(guard) => guard,
                             Err(poisoned) => poisoned.into_inner(),
                         };
+
+                        if let Some((mode, filter_name)) = filter_match {
+                            match mode {
+                                crate::clipboard_filters::ExclusionMode::Ignore => {
+                                    // Ignore completely: never stored in history
+                                    hist.set_last_content_hash(hash);
+                                    continue;
+                                }
+                                crate::clipboard_filters::ExclusionMode::Hide => {
+                                    // Marked as filtered: hidden from normal UI, available for safe inspection
+                                    if let Some(_entry) = hist.add_text_filtered(text, app_source.clone(), filter_name) {
+                                        let _ = app.emit(EVENT_CLIPBOARD_UPDATED, ());
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+
                         if let Some(_entry) = hist.add_text(text, app_source.clone()) {
                             let _ = app.emit(EVENT_CLIPBOARD_UPDATED, ());
                         }
@@ -683,6 +747,11 @@ pub fn start_clipboard_monitor<R: Runtime>(
 #[tauri::command]
 pub fn get_clipboard_history(state: tauri::State<'_, ClipboardState>) -> Vec<ClipboardEntry> {
     state.history.lock().unwrap_or_else(|p| p.into_inner()).list()
+}
+
+#[tauri::command]
+pub fn get_filtered_clipboard_history(state: tauri::State<'_, ClipboardState>) -> Vec<ClipboardEntry> {
+    state.history.lock().unwrap_or_else(|p| p.into_inner()).list_filtered()
 }
 
 #[tauri::command]
@@ -978,5 +1047,25 @@ mod tests {
         // Roundtrip deserialization
         let deserialized: ClipboardEntry = serde_json::from_str(&json).expect("Deserialization must succeed");
         assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn test_filtered_entry_separation() {
+        let mut history = ClipboardHistory::new(10);
+        history.add_text("Normal entry 1".to_string(), None);
+        history.add_text_filtered("Secret token".to_string(), None, "Secrets & Tokens".to_string());
+        history.add_text("Normal entry 2".to_string(), None);
+
+        // Standard list should never return filtered entries
+        let normal = history.list();
+        assert_eq!(normal.len(), 2);
+        assert!(normal.iter().all(|e| !e.is_filtered));
+
+        // Filtered list should return only the filtered entry
+        let filtered = history.list_filtered();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Secret token");
+        assert_eq!(filtered[0].matched_filter.as_deref(), Some("Secrets & Tokens"));
+        assert!(filtered[0].is_filtered);
     }
 }

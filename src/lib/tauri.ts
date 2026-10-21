@@ -81,6 +81,32 @@ export async function getClipboardHistory(): Promise<import("./types").Clipboard
   return invoke<import("./types").ClipboardEntry[]>("get_clipboard_history");
 }
 
+export async function getFilteredClipboardHistory(): Promise<import("./types").ClipboardEntry[]> {
+  return invoke<import("./types").ClipboardEntry[]>("get_filtered_clipboard_history");
+}
+
+export async function getClipboardFiltersConfig(): Promise<import("./types").ClipboardFiltersConfig> {
+  return invoke<import("./types").ClipboardFiltersConfig>("get_clipboard_filters_config");
+}
+
+export async function saveClipboardFiltersConfig(
+  config: import("./types").ClipboardFiltersConfig,
+): Promise<void> {
+  return invoke<void>("save_clipboard_filters_config", { config });
+}
+
+export async function validateClipboardFilter(
+  pattern: string,
+  isRegex: boolean,
+  testText?: string,
+): Promise<import("./types").FilterValidationResult> {
+  return invoke<import("./types").FilterValidationResult>("validate_clipboard_filter", {
+    pattern,
+    isRegex,
+    testText,
+  });
+}
+
 export async function copyClipboardEntry(id: string): Promise<void> {
   return invoke<void>("copy_clipboard_entry", { id });
 }

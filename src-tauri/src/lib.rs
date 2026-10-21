@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod clipboard_filters;
 pub mod features;
 pub mod search;
 pub mod shortcuts;
@@ -10,7 +11,10 @@ use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
     clear_clipboard_history, copy_clipboard_entry, delete_clipboard_entry, get_clipboard_history,
-    toggle_pin_clipboard_entry,
+    get_filtered_clipboard_history, toggle_pin_clipboard_entry,
+};
+use clipboard_filters::{
+    get_clipboard_filters_config, save_clipboard_filters_config, validate_clipboard_filter,
 };
 use features::{get_features_config, set_feature_enabled};
 use shortcuts::{get_shortcuts_status, update_shortcuts};
@@ -141,6 +145,10 @@ pub fn run() {
             update_shortcuts,
             get_shortcuts_status,
             get_clipboard_history,
+            get_filtered_clipboard_history,
+            get_clipboard_filters_config,
+            save_clipboard_filters_config,
+            validate_clipboard_filter,
             copy_clipboard_entry,
             delete_clipboard_entry,
             clear_clipboard_history,
@@ -193,6 +201,10 @@ pub fn run() {
                 shortcut_config.launcher.clone(),
                 shortcut_config.clipboard.clone(),
             ));
+
+            let filters_config = clipboard_filters::load_or_default_filters_config(handle);
+            let filters_state = clipboard_filters::ClipboardFiltersState::new(filters_config);
+            app.manage(filters_state);
 
             let clipboard_state = clipboard::ClipboardState::new(clipboard::DEFAULT_MAX_CLIPBOARD_ENTRIES);
             if features_config.clipboard_history {

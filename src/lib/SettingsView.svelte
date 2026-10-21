@@ -2,8 +2,12 @@
   import { onMount } from "svelte";
   import {
     clearClipboardHistory,
+    copyClipboardEntry,
+    deleteClipboardEntry,
+    getClipboardFiltersConfig,
     getClipboardHistory,
     getFeaturesConfig,
+    getFilteredClipboardHistory,
     getIndexStats,
     getShortcutsStatus,
     hideSettings,
@@ -11,8 +15,10 @@
     onIndexingStatus,
     onOpenSettings,
     reindex,
+    saveClipboardFiltersConfig,
     setFeatureEnabled,
     updateShortcuts,
+    validateClipboardFilter,
   } from "./tauri";
   import {
     applyThemeAndCaret,
@@ -21,7 +27,15 @@
     type SettingsCategory,
     type SettingsState,
   } from "./settings";
-  import type { FeaturesConfig, IndexStats, ShortcutConfigStatus } from "./types";
+  import type {
+    ClipboardEntry,
+    ClipboardFiltersConfig,
+    CustomFilter,
+    FeaturesConfig,
+    FilterValidationResult,
+    IndexStats,
+    ShortcutConfigStatus,
+  } from "./types";
 
   let activeCategory = $state<SettingsCategory>("general");
   let settings = $state<SettingsState>(loadSettings());
@@ -56,6 +70,125 @@
       "flowPrefixes",
       settings.flowPrefixes.filter((p) => p !== prefixToRemove),
     );
+  }
+
+  let filtersConfig = $state<ClipboardFiltersConfig>({
+    mode: "ignore",
+    filterSecrets: true,
+    filterCamelCase: false,
+    filterCreditCards: true,
+    customFilters: [],
+  });
+
+  let customNameInput = $state("");
+  let customPatternInput = $state("");
+  let customIsRegex = $state(false);
+  let testStringInput = $state("");
+  let validationResult = $state<FilterValidationResult | null>(null);
+  let isValidating = $state(false);
+
+  let showSafeInspection = $state(false);
+  let filteredHistory = $state<ClipboardEntry[]>([]);
+  let revealedEntries = $state<Record<string, boolean>>({});
+
+  async function loadFiltersConfig(): Promise<void> {
+    try {
+      filtersConfig = await getClipboardFiltersConfig();
+    } catch {
+      // Ignore outside Tauri
+    }
+  }
+
+  async function updateFilters(newConfig: ClipboardFiltersConfig): Promise<void> {
+    filtersConfig = newConfig;
+    try {
+      await saveClipboardFiltersConfig(newConfig);
+    } catch (e) {
+      console.error("Failed to save filters config", e);
+    }
+  }
+
+  async function testCurrentFilter(): Promise<void> {
+    const pattern = customPatternInput.trim();
+    if (!pattern) return;
+    isValidating = true;
+    try {
+      validationResult = await validateClipboardFilter(
+        pattern,
+        customIsRegex,
+        testStringInput.trim() ? testStringInput : undefined,
+      );
+    } catch (err) {
+      validationResult = { valid: false, error: String(err), matchesTest: null };
+    } finally {
+      isValidating = false;
+    }
+  }
+
+  function addCustomFilter(): void {
+    const pattern = customPatternInput.trim();
+    if (!pattern) return;
+    const newFilter: CustomFilter = {
+      id: "cf_" + Date.now(),
+      name: customNameInput.trim() || pattern,
+      pattern,
+      isRegex: customIsRegex,
+      enabled: true,
+    };
+    void updateFilters({
+      ...filtersConfig,
+      customFilters: [...filtersConfig.customFilters, newFilter],
+    });
+    customNameInput = "";
+    customPatternInput = "";
+    customIsRegex = false;
+    testStringInput = "";
+    validationResult = null;
+  }
+
+  function toggleCustomFilter(id: string): void {
+    void updateFilters({
+      ...filtersConfig,
+      customFilters: filtersConfig.customFilters.map((f) =>
+        f.id === id ? { ...f, enabled: !f.enabled } : f,
+      ),
+    });
+  }
+
+  function removeCustomFilter(id: string): void {
+    void updateFilters({
+      ...filtersConfig,
+      customFilters: filtersConfig.customFilters.filter((f) => f.id !== id),
+    });
+  }
+
+  async function loadFilteredHistory(): Promise<void> {
+    try {
+      filteredHistory = await getFilteredClipboardHistory();
+    } catch {
+      // Ignore
+    }
+  }
+
+  function toggleReveal(id: string): void {
+    revealedEntries[id] = !revealedEntries[id];
+  }
+
+  async function handleDeleteFiltered(id: string): Promise<void> {
+    try {
+      await deleteClipboardEntry(id);
+      filteredHistory = filteredHistory.filter((e) => e.id !== id);
+    } catch {
+      // Ignore
+    }
+  }
+
+  async function handleCopyFiltered(id: string): Promise<void> {
+    try {
+      await copyClipboardEntry(id);
+    } catch {
+      // Ignore
+    }
   }
 
   async function loadFeatures(): Promise<void> {
@@ -172,6 +305,8 @@
     applyThemeAndCaret(settings);
     void loadFeatures();
     void loadShortcutsStatus();
+    void loadFiltersConfig();
+    void loadFilteredHistory();
 
     void getIndexStats()
       .then((stats) => {
@@ -188,6 +323,8 @@
       applyThemeAndCaret(settings);
       void loadFeatures();
       void loadShortcutsStatus();
+      void loadFiltersConfig();
+      void loadFilteredHistory();
       void getIndexStats()
         .then((stats) => {
           indexStats = stats;
@@ -503,6 +640,293 @@
             void handleToggleClipboardHistory(!featuresConfig.clipboardHistory)}
         ></button>
       </div>
+
+      {#if featuresConfig.clipboardHistory}
+        <!-- Exclusion Filter Mode -->
+        <div class="srow">
+          <div>
+            <b>Clipboard Filter Mode</b>
+            <small>
+              {#if filtersConfig.mode === "ignore"}
+                Ignore completely: matching items are never captured or saved
+              {:else}
+                Hide filtered entries: captured privately and masked from normal history
+              {/if}
+            </small>
+          </div>
+          <div class="seg" role="radiogroup" aria-label="Exclusion filter mode">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={filtersConfig.mode === "ignore"}
+              onclick={() =>
+                void updateFilters({ ...filtersConfig, mode: "ignore" })}
+            >
+              Ignore
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={filtersConfig.mode === "hide"}
+              onclick={() => {
+                void updateFilters({ ...filtersConfig, mode: "hide" });
+                void loadFilteredHistory();
+              }}
+            >
+              Hide
+            </button>
+          </div>
+        </div>
+
+        <!-- Predefined Filters -->
+        <div class="srow">
+          <div>
+            <b>Filter Secrets &amp; Tokens</b>
+            <small>API keys, private keys, passwords, auth tokens</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={filtersConfig.filterSecrets}
+            aria-label="Filter secrets and tokens"
+            onclick={() =>
+              void updateFilters({
+                ...filtersConfig,
+                filterSecrets: !filtersConfig.filterSecrets,
+              })}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
+            <b>Filter camelCase Identifiers</b>
+            <small>Exclude camelCase code words and variables</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={filtersConfig.filterCamelCase}
+            aria-label="Filter camelCase"
+            onclick={() =>
+              void updateFilters({
+                ...filtersConfig,
+                filterCamelCase: !filtersConfig.filterCamelCase,
+              })}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
+            <b>Filter Credit Card Numbers</b>
+            <small>Match Visa, MasterCard, Amex, and Discover patterns</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={filtersConfig.filterCreditCards}
+            aria-label="Filter credit cards"
+            onclick={() =>
+              void updateFilters({
+                ...filtersConfig,
+                filterCreditCards: !filtersConfig.filterCreditCards,
+              })}
+          ></button>
+        </div>
+
+        <!-- Custom Exclusion Filters -->
+        <div class="filter-section">
+          <div class="filter-section-header">
+            <b>Custom Filters</b>
+            <small>Add custom regex or literal strings to exclude</small>
+          </div>
+
+          {#if filtersConfig.customFilters.length > 0}
+            <div class="custom-filters-list">
+              {#each filtersConfig.customFilters as filter (filter.id)}
+                <div class="custom-filter-item">
+                  <div class="custom-filter-info">
+                    <span class="custom-filter-name">{filter.name}</span>
+                    <span class="custom-filter-pattern">{filter.pattern}</span>
+                    <span class="custom-filter-badge">{filter.isRegex ? "Regex" : "Literal"}</span>
+                  </div>
+                  <div class="custom-filter-actions">
+                    <button
+                      class="sw"
+                      type="button"
+                      role="switch"
+                      aria-checked={filter.enabled}
+                      aria-label="Toggle filter {filter.name}"
+                      onclick={() => toggleCustomFilter(filter.id)}
+                    ></button>
+                    <button
+                      type="button"
+                      class="filter-remove-btn"
+                      title="Delete filter"
+                      aria-label="Delete filter {filter.name}"
+                      onclick={() => removeCustomFilter(filter.id)}
+                    >
+                      &times;
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <!-- Add / Test form -->
+          <div class="add-filter-card">
+            <div class="filter-inputs-row">
+              <input
+                type="text"
+                class="filter-text-input"
+                placeholder="Filter Name (optional)"
+                bind:value={customNameInput}
+              />
+              <input
+                type="text"
+                class="filter-text-input flex-1"
+                placeholder="Pattern (e.g. ^SECRET-.*)"
+                bind:value={customPatternInput}
+                oninput={() => {
+                  validationResult = null;
+                }}
+              />
+              <label class="filter-checkbox-label">
+                <input type="checkbox" bind:checked={customIsRegex} />
+                <span>Regex</span>
+              </label>
+            </div>
+
+            <div class="filter-test-row">
+              <input
+                type="text"
+                class="filter-text-input flex-1"
+                placeholder="Test string against pattern..."
+                bind:value={testStringInput}
+                oninput={() => {
+                  validationResult = null;
+                }}
+              />
+              <button
+                type="button"
+                class="btn-sub"
+                disabled={!customPatternInput.trim() || isValidating}
+                onclick={testCurrentFilter}
+              >
+                Test
+              </button>
+              <button
+                type="button"
+                class="btn-sub"
+                disabled={!customPatternInput.trim() || (validationResult !== null && !validationResult.valid)}
+                onclick={addCustomFilter}
+              >
+                Add Filter
+              </button>
+            </div>
+
+            {#if validationResult}
+              <div
+                class="validation-banner"
+                class:error={!validationResult.valid}
+                class:match={validationResult.valid && validationResult.matchesTest === true}
+                class:nomatch={validationResult.valid && validationResult.matchesTest === false}
+              >
+                {#if !validationResult.valid}
+                  Invalid Regex: {validationResult.error}
+                {:else if validationResult.matchesTest === true}
+                  Pattern matches test input!
+                {:else if validationResult.matchesTest === false}
+                  Pattern is valid, but did not match test input.
+                {:else}
+                  Pattern is valid!
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Safe Inspection for Hide Mode -->
+        {#if filtersConfig.mode === "hide"}
+          <div class="srow">
+            <div>
+              <b>Safe Inspection</b>
+              <small>{filteredHistory.length} hidden filtered entries safely stored</small>
+            </div>
+            <button
+              type="button"
+              class="btn-sub"
+              onclick={() => {
+                showSafeInspection = !showSafeInspection;
+                if (showSafeInspection) void loadFilteredHistory();
+              }}
+            >
+              {showSafeInspection ? "Close Inspection" : "Inspect Filtered Entries"}
+            </button>
+          </div>
+
+          {#if showSafeInspection}
+            <div class="safe-inspection-container">
+              {#if filteredHistory.length === 0}
+                <div class="safe-inspection-empty">
+                  No hidden filtered entries in history.
+                </div>
+              {:else}
+                <div class="safe-inspection-list">
+                  {#each filteredHistory as entry (entry.id)}
+                    <div class="safe-inspection-item">
+                      <div class="safe-inspection-details">
+                        <div class="safe-inspection-meta">
+                          <span class="safe-filter-badge">{entry.matchedFilter || "Filtered"}</span>
+                          <span class="safe-time">{new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {#if entry.sourceApp}
+                            <span class="safe-app">{entry.sourceApp}</span>
+                          {/if}
+                        </div>
+                        <div class="safe-inspection-content">
+                          {#if revealedEntries[entry.id]}
+                            <span class="safe-revealed-text">{entry.name}</span>
+                          {:else}
+                            <span class="safe-masked-text">••••••••••••••••••••</span>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="safe-inspection-actions">
+                        <button
+                          type="button"
+                          class="btn-sub btn-sm"
+                          onclick={() => toggleReveal(entry.id)}
+                        >
+                          {revealedEntries[entry.id] ? "Hide" : "Reveal"}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-sub btn-sm"
+                          title="Copy to clipboard"
+                          onclick={() => void handleCopyFiltered(entry.id)}
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-sub btn-sm danger"
+                          title="Delete from history"
+                          onclick={() => void handleDeleteFiltered(entry.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+      {/if}
       <div class="srow">
         <div>
           <b>Preview Panel</b>
@@ -823,7 +1247,8 @@
     color: var(--fg);
   }
 
-  .seg button[aria-pressed="true"] {
+  .seg button[aria-pressed="true"],
+  .seg button[aria-checked="true"] {
     background: var(--bg);
     color: var(--fg);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -991,5 +1416,253 @@
 
   .prefix-input:focus {
     border-color: var(--acc, #e5484d);
+  }
+
+  .filter-section {
+    padding: 12px 4px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .filter-section-header b {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+  .filter-section-header small {
+    display: block;
+    color: var(--dim);
+    font-size: 11.5px;
+    margin-top: 2px;
+  }
+
+  .custom-filters-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .custom-filter-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
+  .custom-filter-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .custom-filter-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+  .custom-filter-pattern {
+    font-family: monospace;
+    font-size: 11.5px;
+    color: var(--dim);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .custom-filter-badge {
+    font-size: 10px;
+    background: var(--kbd);
+    color: var(--mut);
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .custom-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .filter-remove-btn {
+    background: none;
+    border: none;
+    color: var(--mut);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: color 0.15s ease;
+  }
+
+  .filter-remove-btn:hover {
+    color: #e5484d;
+  }
+
+  .add-filter-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.03);
+    border: 1px dashed var(--line);
+    border-radius: 6px;
+    padding: 10px;
+  }
+
+  .filter-inputs-row,
+  .filter-test-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .flex-1 {
+    flex: 1;
+  }
+
+  .filter-text-input {
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .filter-text-input:focus {
+    border-color: var(--acc, #e5484d);
+  }
+
+  .filter-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--fg);
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+  }
+
+  .validation-banner {
+    font-size: 11.5px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .validation-banner.match {
+    color: #34c759;
+    background: rgba(52, 199, 89, 0.1);
+    border: 1px solid rgba(52, 199, 89, 0.25);
+  }
+
+  .validation-banner.nomatch {
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.1);
+    border: 1px solid rgba(217, 119, 6, 0.25);
+  }
+
+  .validation-banner.error {
+    color: #e5484d;
+    background: rgba(229, 72, 77, 0.1);
+    border: 1px solid rgba(229, 72, 77, 0.25);
+  }
+
+  .safe-inspection-container {
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .safe-inspection-empty {
+    font-size: 12px;
+    color: var(--dim);
+    font-style: italic;
+    padding: 6px 0;
+  }
+
+  .safe-inspection-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .safe-inspection-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    gap: 12px;
+  }
+
+  .safe-inspection-details {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .safe-inspection-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  .safe-filter-badge {
+    background: rgba(229, 72, 77, 0.15);
+    color: #e5484d;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .safe-inspection-content {
+    font-family: monospace;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .safe-masked-text {
+    letter-spacing: 2px;
+    color: var(--mut);
+  }
+
+  .safe-revealed-text {
+    color: var(--fg);
+  }
+
+  .safe-inspection-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .btn-sm {
+    padding: 3px 8px;
+    font-size: 11px;
   }
 </style>
