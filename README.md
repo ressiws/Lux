@@ -37,14 +37,14 @@ Built with Rust and Tauri 2, Lux combines native desktop integration with a fast
 
 <table>
   <tr>
-    <td align="center" width="50%">
+    <td align="center" height="10%" width="10%">
       <strong>Launcher</strong><br><br>
-      <img src="docs/images/launcher.png" alt="Lux launcher with active search results" width="100%"><br>
+      <img src=".github/assets/launcher.jpg" alt="Lux launcher with active search results" width="100%"><br>
       <sub>Fast application and local file search with category filters and contextual actions.</sub>
     </td>
-    <td align="center" width="50%">
+    <td align="center" height="10%" width="10%">
       <strong>Clipboard History</strong><br><br>
-      <img src="docs/images/clipboard-history.png" alt="Lux clipboard history manager with filtered entries" width="100%"><br>
+      <img src=".github/assets/clipboard.jpg" alt="Lux clipboard history manager with filtered entries" width="100%"><br>
       <sub>Dedicated clipboard manager with automatic privacy filtering for sensitive data.</sub>
     </td>
   </tr>
