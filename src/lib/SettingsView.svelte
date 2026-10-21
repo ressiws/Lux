@@ -466,6 +466,15 @@
     <button
       type="button"
       role="tab"
+      class:active={activeCategory === "help"}
+      aria-selected={activeCategory === "help"}
+      onclick={() => (activeCategory = "help")}
+    >
+      Help &amp; Shortcuts
+    </button>
+    <button
+      type="button"
+      role="tab"
       class:active={activeCategory === "about"}
       aria-selected={activeCategory === "about"}
       onclick={() => (activeCategory = "about")}
@@ -1199,6 +1208,81 @@
         >
           {isIndexing ? "Indexing…" : "Re-index now"}
         </button>
+      </div>
+    {:else if activeCategory === "help"}
+      <div class="help-section">
+        <h4 class="help-heading">Keyboard Shortcuts</h4>
+        <div class="help-table">
+          <div class="help-row">
+            <span class="help-desc">Toggle Lux Launcher</span>
+            <span class="help-keys"><kbd>Alt</kbd> + <kbd>Space</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Open Clipboard History</span>
+            <span class="help-keys"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Open Selected Item / Copy Result</span>
+            <span class="help-keys"><kbd>↵ Enter</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Item Actions Popover</span>
+            <span class="help-keys"><kbd>Ctrl</kbd> + <kbd>K</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Run Application as Administrator</span>
+            <span class="help-keys"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>↵</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Reveal Item in File Explorer</span>
+            <span class="help-keys"><kbd>Ctrl</kbd> + <kbd>O</kbd></span>
+          </div>
+          <div class="help-row">
+            <span class="help-desc">Close / Return to All Categories</span>
+            <span class="help-keys"><kbd>Esc</kbd></span>
+          </div>
+        </div>
+
+        <h4 class="help-heading">Quick Answer Examples</h4>
+        <p class="help-intro">Type these directly into the search bar for instant offline answers without pressing Enter:</p>
+        <div class="help-grid">
+          <div class="help-card">
+            <span class="help-cat">Calculations &amp; Math</span>
+            <code>(128 * 1.19) / 3</code>
+            <code>sqrt(144) + 2^8</code>
+            <code>15% of 240</code>
+          </div>
+          <div class="help-card">
+            <span class="help-cat">Taxes &amp; Split</span>
+            <code>VAT 23% on 100</code>
+            <code>remove 23% VAT from 123</code>
+            <code>split 87.50 between 4</code>
+          </div>
+          <div class="help-card">
+            <span class="help-cat">Time Zones &amp; World Time</span>
+            <code>time in Tokyo</code>
+            <code>10 PM here to London</code>
+            <code>time difference Lisbon London</code>
+          </div>
+          <div class="help-card">
+            <span class="help-cat">Dates &amp; Durations</span>
+            <code>90 days from today</code>
+            <code>days until Christmas</code>
+            <code>days between 12 Oct and 21 Oct</code>
+          </div>
+          <div class="help-card">
+            <span class="help-cat">Unit Conversions</span>
+            <code>100 km to miles</code>
+            <code>100 C to F</code>
+            <code>1 GiB to MB (IEC to SI)</code>
+          </div>
+          <div class="help-card">
+            <span class="help-cat">Currency, Colors &amp; Passwords</span>
+            <code>25 EUR to USD</code>
+            <code>#798F78 to RGB</code>
+            <code>generate password 24</code>
+          </div>
+        </div>
       </div>
     {:else if activeCategory === "about"}
       <div class="about-card">
@@ -2011,6 +2095,107 @@
     border-radius: 6px;
     border: 1px solid var(--line);
     flex-shrink: 0;
+  }
+
+  .help-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 8px 4px 16px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .help-heading {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 4px 0 0;
+    color: var(--fg);
+  }
+
+  .help-intro {
+    font-size: 11.5px;
+    color: var(--mut);
+    margin: -6px 0 2px;
+  }
+
+  .help-table {
+    display: flex;
+    flex-direction: column;
+    background: var(--sel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+
+  .help-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+  }
+
+  .help-row:not(:last-child) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .help-desc {
+    font-size: 12px;
+    color: var(--fg);
+  }
+
+  .help-keys {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .help-keys kbd {
+    background: var(--kbd);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-family: inherit;
+  }
+
+  .help-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+  }
+
+  .help-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--sel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  .help-cat {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent, #4a8fd8);
+    margin-bottom: 2px;
+  }
+
+  .help-card code {
+    font-size: 11px;
+    background: var(--chip);
+    color: var(--fg);
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 1px solid var(--line);
   }
 
   .about-card {

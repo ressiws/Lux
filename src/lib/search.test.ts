@@ -1,5 +1,7 @@
 import {
+  MOCK_ITEMS,
   buildSections,
+  getCategoryPlaceholder,
   hasOnlyFallbackSections,
   mapBackendApp,
   mapBackendFile,
@@ -242,6 +244,142 @@ export function runSearchIntegrationTests(): number {
     assertEqual(sections[0].items.length > 0, true, "Available actions populated");
   });
 
+  // 13. Test dynamic category placeholders
+  check(() => {
+    assertEqual(getCategoryPlaceholder("all"), "Search Anything…", "Default category placeholder");
+    assertEqual(getCategoryPlaceholder("apps"), "Search Applications…", "Apps category placeholder");
+    assertEqual(getCategoryPlaceholder("files"), "Search Files…", "Files category placeholder");
+    assertEqual(getCategoryPlaceholder("actions"), "Search Actions…", "Actions category placeholder");
+  });
+
+  // 14. Test browse mode with empty query
+  check(() => {
+    // Apps browse mode returns all available apps when testing
+    const appSections = buildSections("", undefined, {
+      filter: "apps",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(appSections.length, 1, "Apps browse section present");
+    assertEqual(appSections[0].category, "app", "Apps category");
+    assertEqual(appSections[0].items.length > 0, true, "Apps populated in browse mode");
+
+    // Files browse mode returns all available files when testing
+    const fileSections = buildSections("", undefined, {
+      filter: "files",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(fileSections.length, 1, "Files browse section present");
+    assertEqual(fileSections[0].category, "file", "Files category");
+    assertEqual(fileSections[0].items.length > 0, true, "Files populated in browse mode");
+  });
+
+  // 15. Test subcategory filtering in browse mode
+  check(() => {
+    // Filter apps by devtools
+    const devtoolsSections = buildSections("", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(devtoolsSections.length, 1, "Devtools section present");
+    assertEqual(
+      devtoolsSections[0].items.every((item) =>
+        item.name.includes("Visual Studio") || item.name.includes("Terminal"),
+      ),
+      true,
+      "Devtools only contains developer tools",
+    );
+
+    // Filter files by folders
+    const folderSections = buildSections("", undefined, {
+      filter: "files",
+      subcategory: "folders",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(folderSections.length, 1, "Folders section present");
+    assertEqual(
+      folderSections[0].items.every((item) => item.rightLabel === "Folder"),
+      true,
+      "Folders subcategory contains only folders",
+    );
+
+    // Filter actions by preferences
+    const prefSections = buildSections("", undefined, {
+      filter: "actions",
+      subcategory: "preferences",
+    });
+    assertEqual(prefSections.length, 1, "Preferences actions present");
+    assertEqual(
+      prefSections[0].items.every(
+        (item) => item.name.includes("Theme") || item.name.includes("Settings"),
+      ),
+      true,
+      "Preferences only contains theme and settings",
+    );
+  });
+
+  // 16. Test browse mode with query and subcategory combined
+  check(() => {
+    const sections = buildSections("visual", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(sections.length, 1, "Search within subcategory section present");
+    assertEqual(sections[0].items[0].name, "Visual Studio Code", "Matched Visual Studio Code");
+
+    // Searching for an app that doesn't belong to the selected subcategory returns empty
+    const noMatch = buildSections("spotify", undefined, {
+      filter: "apps",
+      subcategory: "devtools",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(noMatch.length, 0, "Spotify not in devtools");
+  });
+
+  // 17. Test switching primary categories preserves query
+  check(() => {
+    const query = "wedding";
+    const appResult = buildSections(query, undefined, {
+      filter: "apps",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(appResult.length, 0, "No wedding apps");
+
+    const fileResult = buildSections(query, undefined, {
+      filter: "files",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(fileResult.length, 1, "Wedding files found");
+    assertEqual(fileResult[0].items.length > 0, true, "Files matched query");
+  });
+
+  // 18. Test empty state behavior when file search disabled
+  check(() => {
+    const disabledFileSearch = buildSections("", undefined, {
+      filter: "files",
+      enableFileSearch: false,
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(disabledFileSearch.length, 0, "Empty when file search disabled");
+  });
+
+  // 19. Verify no mock data in production search or browse when backend response is absent
+  check(() => {
+    // Empty backend response returns 0 items in production, never fictional mock items
+    const prodAppSections = buildSections("", undefined, { filter: "apps" });
+    assertEqual(prodAppSections.length, 0, "No mock apps in production browse");
+
+    const prodFileSections = buildSections("", undefined, { filter: "files" });
+    assertEqual(prodFileSections.length, 0, "No mock files in production browse");
+
+    const prodSearchSections = buildSections("anything", undefined, { filter: "all" });
+    assertEqual(
+      prodSearchSections.every((s) => s.category !== "app" && s.category !== "file"),
+      true,
+      "No mock apps or files in production search when backend response is absent",
+    );
+  });
   return passed;
 }
 

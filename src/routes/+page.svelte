@@ -4,6 +4,7 @@
   import {
     CATEGORY_ICONS,
     buildSections,
+    getCategoryPlaceholder,
     hasOnlyFallbackSections,
     splitHighlight,
   } from "$lib/mock-data";
@@ -21,6 +22,8 @@
     onOpenLauncher,
     openSettings,
     openTarget,
+    browseLauncher,
+    getImageThumbnail,
     openTargetAsAdmin,
     reindex,
     revealItemInFolder,
@@ -37,7 +40,11 @@
     saveSettings,
     type SettingsState,
   } from "$lib/settings";
-  import type { SearchFilter } from "$lib/mock-data";
+  import type { SearchFilter, BuildSectionsOptions } from "$lib/mock-data";
+  import {
+    getAvailableSubcategories,
+    type SubcategoryItem,
+  } from "$lib/classification";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { resolvePrefix } from "$lib/prefix";
   import type {
@@ -46,6 +53,7 @@
     IndexingStatusPayload,
     ItemAction,
     LauncherItem,
+    LauncherSection,
     SearchResponse,
   } from "$lib/types";
 
@@ -81,12 +89,22 @@
   let searchInput: HTMLInputElement | undefined = $state();
   let listContainer: HTMLDivElement | undefined = $state();
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchSeq = 0;
+  let opSeq = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
   let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let isSearching = $state(false);
   let searchBarVisible = $state(false);
   let activeFilter = $state<SearchFilter>("all");
+  let activeSubcategory = $state<string>("all");
+  let browseResponse = $state<SearchResponse | undefined>(undefined);
+  const BATCH_SIZE_APPS = 50;
+  const BATCH_SIZE_FILES = 20;
+  function getBatchSize(filter: SearchFilter): number {
+    return filter === "files" ? BATCH_SIZE_FILES : BATCH_SIZE_APPS;
+  }
+  const browseCache = new Map<SearchFilter, SearchResponse>();
+  let visibleCount = $state(BATCH_SIZE_APPS);
+  let sentinelElement = $state<HTMLElement | undefined>(undefined);
 
   const prefixResolution = $derived(
     resolvePrefix(
@@ -96,16 +114,59 @@
     ),
   );
   const effectiveQuery = $derived(prefixResolution.effectiveQuery);
-  const isIdle = $derived(effectiveQuery.trim().length === 0);
+  const isBrowseMode = $derived(activeFilter !== "all");
+  const isIdle = $derived(effectiveQuery.trim().length === 0 && !isBrowseMode);
+
+  // All items in the selected category (without subcategory filtering)
+  // to compute available contextual subcategories that actually have results.
+  const allCategoryItems = $derived.by<LauncherItem[]>(() => {
+    if (!isBrowseMode) return [];
+    const base = buildSections(effectiveQuery, searchResponse, {
+      enableFileSearch: settings.fileSearch,
+      filter: activeFilter,
+      subcategory: "all",
+      browseResponse,
+    });
+    return base.flatMap((s) => s.items);
+  });
+
+  const availableSubcategories = $derived(
+    getAvailableSubcategories(activeFilter, allCategoryItems),
+  );
+
   const sections = $derived(
     buildSections(effectiveQuery, searchResponse, {
       enableFileSearch: settings.fileSearch,
       filter: activeFilter,
+      subcategory: activeSubcategory,
+      browseResponse,
     }),
   );
   const flatItems = $derived(sections.flatMap((section) => section.items));
+
+  const visibleSections = $derived.by<LauncherSection[]>(() => {
+    if (flatItems.length <= visibleCount) {
+      return sections;
+    }
+    let remaining = visibleCount;
+    const sliced: LauncherSection[] = [];
+    for (const sec of sections) {
+      if (remaining <= 0) break;
+      if (sec.items.length <= remaining) {
+        sliced.push(sec);
+        remaining -= sec.items.length;
+      } else {
+        sliced.push({
+          ...sec,
+          items: sec.items.slice(0, remaining),
+        });
+        remaining = 0;
+      }
+    }
+    return sliced;
+  });
   const showViewSelector = $derived(
-    !isIdle && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+    (isBrowseMode || !isIdle) && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
@@ -114,14 +175,14 @@
     Boolean(
       selectedItem &&
         settings.preview &&
-        selectedItem.category !== "calc" &&
-        selectedItem.category !== "fb" &&
-        !isIdle,
+        selectedItem.category !== "calc"
+        && selectedItem.category !== "fb"
+        && (isBrowseMode || !isIdle),
     ),
   );
   const showEmptyState = $derived(
-    effectiveQuery.trim().length > 0 &&
-      (flatItems.length === 0 || hasOnlyFallbackSections(sections)),
+    (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
+      (effectiveQuery.trim().length > 0 || isBrowseMode),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
 
@@ -129,6 +190,81 @@
   let collapseTimer: ReturnType<typeof setTimeout> | undefined;
 
   const shouldExpand = $derived(!isIdle);
+
+  let previewThumbnailUrl = $state<string | undefined>(undefined);
+  let previewImageFailed = $state(false);
+
+  $effect(() => {
+    const item = selectedItem;
+    previewImageFailed = false;
+    if (item && item.isImage) {
+      if (item.thumbnail) {
+        previewThumbnailUrl = item.thumbnail;
+      } else if (item.path) {
+        previewThumbnailUrl = undefined;
+        const targetPath = item.path;
+        void getImageThumbnail(targetPath).then((thumb) => {
+          if (selectedItem?.path === targetPath) {
+            if (thumb) {
+              previewThumbnailUrl = thumb;
+            } else {
+              previewImageFailed = true;
+            }
+          }
+        });
+      } else {
+        previewThumbnailUrl = undefined;
+        previewImageFailed = true;
+      }
+    } else {
+      previewThumbnailUrl = undefined;
+      previewImageFailed = false;
+    }
+  });
+  let observer: IntersectionObserver | undefined;
+  $effect(() => {
+    if (sentinelElement && visibleCount < flatItems.length) {
+      observer?.disconnect();
+      if (typeof IntersectionObserver !== "undefined") {
+        observer = new IntersectionObserver(
+          (entries) => {
+            if (entries[0]?.isIntersecting) {
+              if (visibleCount < flatItems.length) {
+                visibleCount = Math.min(
+                  flatItems.length,
+                  visibleCount + getBatchSize(activeFilter),
+                );
+              }
+            }
+          },
+          { root: listContainer, rootMargin: "200px" },
+        );
+        observer.observe(sentinelElement);
+      }
+      return () => observer?.disconnect();
+    }
+  });
+
+  function handleListScroll(): void {
+    if (!listContainer || visibleCount >= flatItems.length) return;
+    const { scrollTop, scrollHeight, clientHeight } = listContainer;
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      visibleCount = Math.min(
+        flatItems.length,
+        visibleCount + getBatchSize(activeFilter),
+      );
+    }
+  }
+
+  $effect(() => {
+    const _q = effectiveQuery;
+    const _f = activeFilter;
+    const _s = activeSubcategory;
+    visibleCount = getBatchSize(_f);
+    if (listContainer) {
+      listContainer.scrollTop = 0;
+    }
+  });
 
   const currentIdleHeight = $derived(
     getIdleLauncherHeight(settings.informationDensity, settings.layoutDensity),
@@ -185,34 +321,36 @@
   });
 
   async function performSearch(q: string): Promise<void> {
-    const seq = ++searchSeq;
+    const seq = ++opSeq;
     const trimmed = q.trim();
     if (trimmed.length === 0) {
       isSearching = false;
       searchBarVisible = false;
       clearTimeout(searchProgressTimer);
       searchResponse = undefined;
+      if (activeFilter !== "all" && !browseResponse) {
+        void loadBrowseData(activeFilter);
+      }
       return;
     }
 
     isSearching = true;
     clearTimeout(searchProgressTimer);
-    // Avoid flash for instantaneous in-memory searches: show indicator if query takes > 35ms
     searchProgressTimer = setTimeout(() => {
-      if (isSearching && seq === searchSeq) {
+      if (isSearching && seq === opSeq) {
         searchBarVisible = true;
       }
     }, 35);
 
     try {
       const resp = await searchLauncher(trimmed);
-      if (seq === searchSeq) {
+      if (seq === opSeq) {
         searchResponse = resp;
       }
     } catch {
       // Ignore if Tauri invocation is unavailable
     } finally {
-      if (seq === searchSeq) {
+      if (seq === opSeq) {
         isSearching = false;
         searchBarVisible = false;
         clearTimeout(searchProgressTimer);
@@ -243,11 +381,57 @@
     focusSearchInput();
   }
 
+  async function loadBrowseData(filter: SearchFilter): Promise<void> {
+    const seq = ++opSeq;
+    if (filter === "all" || filter === "actions") {
+      browseResponse = undefined;
+      return;
+    }
+    const cached = browseCache.get(filter);
+    if (cached) {
+      browseResponse = cached;
+      return;
+    }
+    try {
+      const resp = await browseLauncher(filter);
+      if (seq === opSeq && activeFilter === filter) {
+        browseCache.set(filter, resp);
+        browseResponse = resp;
+      }
+    } catch {
+      // Ignore if outside Tauri environment
+    }
+  }
+
+  function returnToAllCategories(): void {
+    activeFilter = "all";
+    activeSubcategory = "all";
+    browseResponse = undefined;
+    visibleCount = getBatchSize("all");
+    selectedIndex = 0;
+    selectedActionIndex = 0;
+    focusSearchInput();
+    if (query.trim().length > 0) {
+      void performSearch(effectiveQuery);
+    }
+  }
+
+  function selectSubcategory(subcatId: string): void {
+    activeSubcategory = subcatId;
+    visibleCount = getBatchSize(activeFilter);
+    selectedIndex = 0;
+    selectedActionIndex = 0;
+    focusSearchInput();
+  }
+
   function toggleFilter(filter: "apps" | "files" | "actions"): void {
+    activeSubcategory = "all";
+    visibleCount = getBatchSize(filter);
     if (activeFilter === filter) {
-      activeFilter = "all";
+      returnToAllCategories();
     } else {
       activeFilter = filter;
+      void loadBrowseData(filter);
     }
     selectedIndex = 0;
     selectedActionIndex = 0;
@@ -267,7 +451,7 @@
     selectedActionIndex = 0;
     query = "";
     selectedIndex = 0;
-    searchSeq++;
+    opSeq++;
     isSearching = false;
     searchBarVisible = false;
     searchResponse = undefined;
@@ -499,7 +683,7 @@
       isSearching = false;
       searchBarVisible = false;
       searchResponse = undefined;
-      searchSeq++;
+      opSeq++;
       return;
     }
 
@@ -932,6 +1116,9 @@
 
     void onIndexingStatus((payload) => {
       isIndexing = payload.isIndexing;
+      if (!payload.isIndexing && activeFilter !== "all") {
+        void loadBrowseData(activeFilter);
+      }
       if (!payload.isIndexing) {
         indexStats = {
           totalApps: payload.totalApps,
@@ -1011,7 +1198,85 @@
   aria-label="Lux command palette"
 >
   <div class="bar" id="bar" data-tauri-drag-region>
-    {#if isIdle}
+    {#if activeFilter !== "all"}
+      <button
+        type="button"
+        class="cat-back-btn"
+        title="Back to Search Anything"
+        aria-label="Back to Search Anything"
+        onmousedown={preventFocusLossOnMouseDown}
+        onclick={returnToAllCategories}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            returnToAllCategories();
+          }
+        }}
+      >
+        <span class="icon-cat" aria-hidden="true">
+          {#if activeFilter === "apps"}
+            <svg
+              class="search-icon"
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="4" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
+          {:else if activeFilter === "files"}
+            <svg
+              class="search-icon"
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+          {:else if activeFilter === "actions"}
+            <svg
+              class="search-icon"
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+            </svg>
+          {/if}
+        </span>
+        <span class="icon-arrow" aria-hidden="true">
+          <svg
+            class="search-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+        </span>
+      </button>
+    {:else if isIdle}
       <div class="logo bar-logo" aria-label="Lux">
         <svg viewBox="0 0 64 64" width="14" height="14" fill="currentColor">
           <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
@@ -1048,7 +1313,7 @@
       oninput={handleQueryInput}
       autocomplete="off"
       spellcheck="false"
-      placeholder="Search Anything…"
+      placeholder={getCategoryPlaceholder(activeFilter)}
       aria-label="Search"
     />
     <div class="spin" aria-hidden="true"></div>
@@ -1115,84 +1380,80 @@
       <div class="bar-divider" aria-hidden="true"></div>
     {/if}
 
-    <div class="filter-group" role="toolbar" aria-label="Search filters">
-      <button
-        type="button"
-        class="filter-btn"
-        class:active={activeFilter === "apps"}
-        aria-pressed={activeFilter === "apps"}
-        title="Search Applications (Ctrl+1)"
-        aria-label="Filter: Applications"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => toggleFilter("apps")}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+    {#if activeFilter === "all"}
+      <div class="filter-group" role="toolbar" aria-label="Search filters">
+        <button
+          type="button"
+          class="filter-btn"
+          title="Search Applications (Ctrl+1)"
+          aria-label="Filter: Applications"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => toggleFilter("apps")}
         >
-          <rect x="3" y="3" width="18" height="18" rx="4" />
-          <path d="M3 9h18M9 21V9" />
-        </svg>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="4" />
+            <path d="M3 9h18M9 21V9" />
+          </svg>
+        </button>
 
-      <button
-        type="button"
-        class="filter-btn"
-        class:active={activeFilter === "files"}
-        aria-pressed={activeFilter === "files"}
-        title="Search Files (Ctrl+2)"
-        aria-label="Filter: Files and Folders"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => toggleFilter("files")}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+        <button
+          type="button"
+          class="filter-btn"
+          title="Search Files (Ctrl+2)"
+          aria-label="Filter: Files and Folders"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => toggleFilter("files")}
         >
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-        </svg>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+        </button>
 
-      <button
-        type="button"
-        class="filter-btn"
-        class:active={activeFilter === "actions"}
-        aria-pressed={activeFilter === "actions"}
-        title="Search Actions (Ctrl+3)"
-        aria-label="Filter: Actions and Commands"
-        onmousedown={preventFocusLossOnMouseDown}
-        onclick={() => toggleFilter("actions")}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+        <button
+          type="button"
+          class="filter-btn"
+          title="Search Actions (Ctrl+3)"
+          aria-label="Filter: Actions and Commands"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => toggleFilter("actions")}
         >
-          <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
-        </svg>
-      </button>
-    </div>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+          </svg>
+        </button>
+      </div>
+    {/if}
     {#if isIndexing && settings.progressBar}
       <div class="progress-bar indexing-bar" aria-hidden="true" title="Indexing applications and files…">
         <div class="progress-bar-fill indexing-fill"></div>
@@ -1205,10 +1466,29 @@
     {/if}
   </div>
 
+  {#if activeFilter !== "all" && availableSubcategories.length > 1}
+    <div class="subcategories-bar" role="tablist" aria-label="Subcategories">
+      {#each availableSubcategories as subcat (subcat.id)}
+        <button
+          type="button"
+          class="subcat-chip"
+          class:active={activeSubcategory === subcat.id}
+          role="tab"
+          aria-selected={activeSubcategory === subcat.id}
+          tabindex="0"
+          onmousedown={preventFocusLossOnMouseDown}
+          onclick={() => selectSubcategory(subcat.id)}
+        >
+          {subcat.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
+
 
 
   <div class="body">
-    <div id="list" role="listbox" aria-label="Results" bind:this={listContainer}>
+    <div id="list" role="listbox" aria-label="Results" bind:this={listContainer} onscroll={handleListScroll}>
       {#if showEmptyState}
         <div class="empty">
           <svg
@@ -1224,21 +1504,41 @@
             <path d="m16 16 4 4M9 11h4" />
           </svg>
           <div class="t">
-            {#if activeFilter === "apps"}
-              No applications for “{effectiveQuery.trim()}”
-            {:else if activeFilter === "files"}
-              No files for “{effectiveQuery.trim()}”
-            {:else if activeFilter === "actions"}
-              No actions for “{effectiveQuery.trim()}”
+            {#if effectiveQuery.trim()}
+              {#if activeFilter === "apps"}
+                No applications for “{effectiveQuery.trim()}”
+              {:else if activeFilter === "files"}
+                No files for “{effectiveQuery.trim()}”
+              {:else if activeFilter === "actions"}
+                No actions for “{effectiveQuery.trim()}”
+              {:else}
+                No results for “{effectiveQuery.trim()}”
+              {/if}
             {:else}
-              No results for “{effectiveQuery.trim()}”
+              {#if activeFilter === "apps"}
+                No applications available
+              {:else if activeFilter === "files"}
+                No files available
+              {:else if activeFilter === "actions"}
+                No actions available
+              {:else}
+                No results
+              {/if}
             {/if}
           </div>
-          <p>Check the spelling, or try another search.</p>
+          <p>
+            {#if effectiveQuery.trim()}
+              Check the spelling, or try another search.
+            {:else if activeSubcategory !== "all"}
+              No items found in this category.
+            {:else}
+              No indexed items found.
+            {/if}
+          </p>
         </div>
       {/if}
 
-      {#each sections as section (section.title)}
+      {#each visibleSections as section (section.title)}
         {@const isGrid =
           settings.layout === "grid" &&
           (section.category === "app" || section.category === "file")}
@@ -1348,7 +1648,11 @@
                 </div>
                 <div class="b">
                   <small>{item.calc.label}</small>
-                  <div class="v">{item.calc.value}</div>
+                  <div class="v">
+                    {#if item.calc.colorPreview}
+                      <span class="color-preview-chip" style:background-color={item.calc.colorPreview} aria-hidden="true"></span>
+                    {/if}{item.calc.value}
+                  </div>
                 </div>
               </div>
             {:else}
@@ -1416,7 +1720,7 @@
                         >{highlighted.match}</mark
                       >{/if}{highlighted.after}
                   </span>
-                  <span class="s">{item.subtitle}</span>
+                  {#if item.subtitle && item.subtitle.trim().toLowerCase() !== "application" && item.subtitle.trim().toLowerCase() !== item.rightLabel?.trim().toLowerCase()}<span class="s">{item.subtitle}</span>{/if}
                 </div>
                 <span class="r">{item.rightLabel}</span>
               </div>
@@ -1424,6 +1728,9 @@
           {/each}
         {/if}
       {/each}
+      {#if visibleCount < flatItems.length}
+        <div class="sentinel" bind:this={sentinelElement} aria-hidden="true"></div>
+      {/if}
     </div>
 
     {#if showPreview && selectedItem}
@@ -1919,6 +2226,143 @@
     flex: none;
   }
 
+  .cat-back-btn {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    color: var(--mut);
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .cat-back-btn:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .cat-back-btn:focus-visible {
+    outline: 2px solid var(--accent, #4a8fd8);
+    outline-offset: 1px;
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .cat-back-btn .icon-cat {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .cat-back-btn .icon-arrow {
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .cat-back-btn:hover .icon-cat,
+  .cat-back-btn:focus-visible .icon-cat {
+    display: none;
+  }
+
+  .cat-back-btn:hover .icon-arrow,
+  .cat-back-btn:focus-visible .icon-arrow {
+    display: inline-flex;
+  }
+
+  .sentinel {
+    width: 100%;
+    height: 1px;
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  :global(:root[data-layout-density="compact"]) .cat-back-btn {
+    width: 22px;
+    height: 22px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .cat-back-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .subcategories-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px 8px;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: none;
+    background: transparent;
+  }
+
+  .subcategories-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .subcat-chip {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--mut);
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 1;
+    padding: 5px 10px;
+    border-radius: 9999px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+
+  .subcat-chip:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+
+  .subcat-chip:focus-visible {
+    outline: 2px solid var(--accent, #4a8fd8);
+    outline-offset: 1px;
+  }
+
+  .subcat-chip.active {
+    background: var(--sel);
+    color: var(--fg);
+    border-color: var(--line);
+    font-weight: 600;
+  }
+
+  :global(:root[data-layout-density="compact"]) .subcategories-bar {
+    padding: 4px 12px 6px;
+    gap: 4px;
+  }
+
+  :global(:root[data-layout-density="compact"]) .subcat-chip {
+    font-size: 10.5px;
+    padding: 3px 8px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .subcategories-bar {
+    padding: 8px 20px 10px;
+    gap: 8px;
+  }
+
+  :global(:root[data-layout-density="comfortable"]) .subcat-chip {
+    font-size: 12.5px;
+    padding: 6px 12px;
+  }
+
   .filter-btn {
     border: none;
     background: transparent;
@@ -1939,15 +2383,11 @@
     color: var(--fg);
   }
 
-  .filter-btn.active {
-    background: var(--sel);
-    color: var(--fg);
-    box-shadow: inset 0 0 0 1px var(--line);
-  }
 
   @media (prefers-reduced-motion: reduce) {
     .view-btn,
-    .filter-btn {
+    .filter-btn,
+    .subcat-chip {
       transition: none !important;
     }
   }
@@ -2212,6 +2652,17 @@
     color: var(--dim);
     font-size: 11.5px;
     margin-bottom: 3px;
+  }
+
+  .color-preview-chip {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    margin-right: 8px;
+    vertical-align: middle;
+    border: 1px solid var(--line);
+    flex-shrink: 0;
   }
 
   .calc .v {

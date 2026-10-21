@@ -6,6 +6,7 @@ export type SettingsCategory =
   | "search"
   | "clipboard"
   | "features"
+  | "help"
   | "about";
 
 export type InformationDensity = "minimal" | "normal" | "detailed";

@@ -18,6 +18,8 @@ export interface CalcPreview {
   readonly expression: string;
   readonly label: string;
   readonly raw: string;
+  readonly categoryLabel?: string;
+  readonly colorPreview?: string;
 }
 
 export interface LauncherItem {

@@ -18,6 +18,10 @@ export async function searchLauncher(query: string): Promise<SearchResponse> {
   return invoke<SearchResponse>("search_launcher", { query });
 }
 
+export async function browseLauncher(category: string): Promise<SearchResponse> {
+  return invoke<SearchResponse>("browse_launcher", { category });
+}
+
 export async function openTarget(path: string): Promise<void> {
   return invoke<void>("open_target", { path });
 }
@@ -28,6 +32,17 @@ export async function openTargetAsAdmin(path: string): Promise<void> {
 
 export async function revealItemInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_item_in_folder", { path });
+}
+
+export async function getImageThumbnail(
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const res = await invoke<string | null>("get_image_thumbnail", { path });
+    return res ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function setLauncherHeight(
