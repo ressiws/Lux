@@ -380,6 +380,29 @@ export function runSearchIntegrationTests(): number {
       "No mock apps or files in production search when backend response is absent",
     );
   });
+  // 20. Test deduplication of backend apps and files
+  check(() => {
+    const duplicateResponse: SearchResponse = {
+      apps: [sampleApp, { ...sampleApp }, { ...sampleApp, name: "Discord" }],
+      files: [sampleDoc, { ...sampleDoc }, sampleDoc],
+    };
+
+    const sections = buildSections("discord", duplicateResponse, { filter: "all" });
+    const appSection = sections.find((s) => s.category === "app");
+    assertEqual(appSection?.items.length, 1, "Duplicate apps must be deduplicated to 1");
+
+    const fileSections = buildSections("notes", duplicateResponse, { filter: "files" });
+    assertEqual(fileSections[0]?.items.length, 1, "Duplicate files must be deduplicated to 1");
+
+    // Multiple distinct files are preserved without false deduplication
+    const multiResponse: SearchResponse = {
+      apps: [sampleApp],
+      files: [sampleDoc, { ...sampleDoc }, sampleImage, { ...sampleImage }],
+    };
+    const multiSections = buildSections("", multiResponse, { filter: "files" });
+    assertEqual(multiSections[0]?.items.length, 2, "Distinct files are preserved (doc and image)");
+  });
+
   return passed;
 }
 

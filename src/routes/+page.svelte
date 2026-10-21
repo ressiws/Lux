@@ -367,6 +367,7 @@
 
   function setQuery(val: string): void {
     query = val;
+    activeSubcategory = "all";
     selectedIndex = 0;
     selectedActionIndex = 0;
     actionsOpen = false;
@@ -447,6 +448,7 @@
 
   function resetLauncherState(shouldFocus: boolean): void {
     activeFilter = "all";
+    activeSubcategory = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
     query = "";
@@ -677,6 +679,10 @@
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
     clearTimeout(searchProgressTimer);
+
+    if (activeSubcategory !== "all") {
+      activeSubcategory = "all";
+    }
 
     const q = effectiveQuery;
     if (q.trim().length === 0) {
@@ -1545,7 +1551,7 @@
         <div class="sec">{section.title}</div>
         {#if isGrid}
           <div class="grid">
-            {#each section.items as item (item.category + ":" + (item.path || item.name))}
+            {#each section.items as item, itemIdx (item.category + ":" + (item.path || item.name) + ":" + itemIdx)}
               {@const itemIndex = flatItems.indexOf(item)}
               {@const isSelected = itemIndex === selectedIndex}
               {@const highlighted = splitHighlight(item.name, query)}
@@ -1612,7 +1618,7 @@
             {/each}
           </div>
         {:else}
-          {#each section.items as item (item.category + ":" + (item.path || item.name))}
+          {#each section.items as item, itemIdx (item.category + ":" + (item.path || item.name) + ":" + itemIdx)}
             {@const itemIndex = flatItems.indexOf(item)}
             {@const isSelected = itemIndex === selectedIndex}
             {#if item.category === "calc" && item.calc}

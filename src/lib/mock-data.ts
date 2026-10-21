@@ -408,6 +408,21 @@ export interface BuildSectionsOptions {
   mockItemsForTesting?: readonly LauncherItem[];
 }
 
+function deduplicateLauncherItems(
+  items: readonly LauncherItem[],
+): LauncherItem[] {
+  const seen = new Set<string>();
+  const out: LauncherItem[] = [];
+  for (const item of items) {
+    const key = item.path ? item.path.toLowerCase() : item.name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
 export function buildSections(
   rawQuery: string,
   searchResponse?: SearchResponse,
@@ -425,7 +440,7 @@ export function buildSections(
     let apps: LauncherItem[];
     if (trimmed) {
       if (searchResponse) {
-        apps = searchResponse.apps.map(mapBackendApp);
+        apps = deduplicateLauncherItems(searchResponse.apps.map(mapBackendApp));
       } else if (testItems) {
         apps = testItems.filter(
           (item) => item.category === "app" && scoreItem(item, lowered) > 0,
@@ -436,9 +451,9 @@ export function buildSections(
     } else {
       // Browse mode: show all available applications
       if (searchResponse && searchResponse.apps.length > 0) {
-        apps = searchResponse.apps.map(mapBackendApp);
+        apps = deduplicateLauncherItems(searchResponse.apps.map(mapBackendApp));
       } else if (options?.browseResponse && options.browseResponse.apps.length > 0) {
-        apps = options.browseResponse.apps.map(mapBackendApp);
+        apps = deduplicateLauncherItems(options.browseResponse.apps.map(mapBackendApp));
       } else if (testItems) {
         apps = testItems.filter((item) => item.category === "app");
       } else {
@@ -470,7 +485,7 @@ export function buildSections(
     let files: LauncherItem[];
     if (trimmed) {
       if (searchResponse) {
-        files = searchResponse.files.map(mapBackendFile);
+        files = deduplicateLauncherItems(searchResponse.files.map(mapBackendFile));
       } else if (testItems) {
         files = testItems.filter(
           (item) => item.category === "file" && scoreItem(item, lowered) > 0,
@@ -481,9 +496,9 @@ export function buildSections(
     } else {
       // Browse mode: show all available files, folders, and images
       if (searchResponse && searchResponse.files.length > 0) {
-        files = searchResponse.files.map(mapBackendFile);
+        files = deduplicateLauncherItems(searchResponse.files.map(mapBackendFile));
       } else if (options?.browseResponse && options.browseResponse.files.length > 0) {
-        files = options.browseResponse.files.map(mapBackendFile);
+        files = deduplicateLauncherItems(options.browseResponse.files.map(mapBackendFile));
       } else if (testItems) {
         files = testItems.filter((item) => item.category === "file");
       } else {
@@ -530,9 +545,9 @@ export function buildSections(
   // 4. Default / All categories
   const suggestedApps =
     searchResponse && searchResponse.apps.length > 0
-      ? searchResponse.apps.slice(0, 4).map(mapBackendApp)
+      ? deduplicateLauncherItems(searchResponse.apps.slice(0, 4).map(mapBackendApp))
       : options?.browseResponse && options.browseResponse.apps.length > 0
-        ? options.browseResponse.apps.slice(0, 4).map(mapBackendApp)
+        ? deduplicateLauncherItems(options.browseResponse.apps.slice(0, 4).map(mapBackendApp))
         : testItems
           ? testItems.filter((item) => SUGGESTED_APP_NAMES.has(item.name))
           : [];
@@ -584,7 +599,7 @@ export function buildSections(
       sections.push({
         category: "app",
         title: SECTION_TITLES.app,
-        items: searchResponse.apps.map(mapBackendApp),
+        items: deduplicateLauncherItems(searchResponse.apps.map(mapBackendApp)),
       });
     }
 
@@ -592,7 +607,7 @@ export function buildSections(
       sections.push({
         category: "file",
         title: SECTION_TITLES.file,
-        items: searchResponse.files.map(mapBackendFile),
+        items: deduplicateLauncherItems(searchResponse.files.map(mapBackendFile)),
       });
     }
 

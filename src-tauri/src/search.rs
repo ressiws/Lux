@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const MAX_DIR_DEPTH: usize = 6;
 const MAX_INDEXED_FILES: usize = 50000;
-const MAX_RESULTS_PER_CATEGORY: usize = 8;
+const MAX_RESULTS_PER_CATEGORY: usize = 50;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico", "tiff", "tif", "avif",
@@ -40,6 +40,10 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     "tmp",
     "temp",
     "windows",
+    "system32",
+    "syswow64",
+    "winsxs",
+    "users",
     "system volume information",
     "$recycle.bin",
     "$windows.~bt",
@@ -999,6 +1003,7 @@ fn walk_directory_files(
     dir: &Path,
     current_depth: usize,
     max_depth: usize,
+    seen_paths: &mut HashSet<PathBuf>,
     indexed_files: &mut Vec<IndexedFile>,
 ) {
     if current_depth > max_depth || indexed_files.len() >= MAX_INDEXED_FILES {
@@ -1033,6 +1038,15 @@ fn walk_directory_files(
 
         let path = entry.path();
 
+        #[cfg(target_os = "windows")]
+        let norm_path = PathBuf::from(path.to_string_lossy().to_lowercase());
+        #[cfg(not(target_os = "windows"))]
+        let norm_path = path.clone();
+
+        if !seen_paths.insert(norm_path) {
+            continue;
+        }
+
         if file_type.is_dir() {
             let lower_name = name_str.to_lowercase();
             if IGNORED_DIR_NAMES.contains(&lower_name.as_str()) {
@@ -1064,6 +1078,7 @@ fn walk_directory_files(
                 &path,
                 current_depth + 1,
                 max_depth,
+                seen_paths,
                 indexed_files,
             );
         } else if file_type.is_file() {
@@ -1177,6 +1192,36 @@ pub fn get_user_search_directories(home_dir: &Option<PathBuf>) -> Vec<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
+        // Add OneDrive directories (Desktop, Documents, Pictures, etc.)
+        let mut onedrive_roots = Vec::new();
+        if let Some(od) = std::env::var_os("OneDrive") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(od) = std::env::var_os("OneDriveConsumer") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(od) = std::env::var_os("OneDriveCommercial") {
+            onedrive_roots.push(PathBuf::from(od));
+        }
+        if let Some(home) = home_dir {
+            onedrive_roots.push(home.join("OneDrive"));
+            onedrive_roots.push(home.join("OneDrive - Personal"));
+        }
+        for od in onedrive_roots {
+            if od.is_dir() {
+                add_dir(od.join("Desktop"));
+                add_dir(od.join("Documents"));
+                add_dir(od.join("Pictures"));
+                add_dir(od);
+            }
+        }
+
+        if let Some(pub_dir) = std::env::var_os("PUBLIC") {
+            let pub_path = PathBuf::from(pub_dir);
+            add_dir(pub_path.join("Desktop"));
+            add_dir(pub_path.join("Documents"));
+        }
+
         let available_drives = get_available_windows_drives();
 
         // 1. Check common user folders on all drives first (e.g. D:\projects, C:\projects, etc.)
@@ -1272,6 +1317,34 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
             PathBuf::from(programdata).join("Microsoft\\Windows\\Start Menu\\Programs"),
         );
     }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        start_menu_roots.push(
+            PathBuf::from(appdata).join("Microsoft\\Windows\\Start Menu"),
+        );
+    }
+    if let Some(programdata) = std::env::var_os("PROGRAMDATA") {
+        start_menu_roots.push(
+            PathBuf::from(programdata).join("Microsoft\\Windows\\Start Menu"),
+        );
+    }
+    if let Some(localappdata) = std::env::var_os("LOCALAPPDATA") {
+        start_menu_roots.push(
+            PathBuf::from(localappdata).join("Programs"),
+        );
+    }
+    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+        let profile_path = PathBuf::from(userprofile);
+        start_menu_roots.push(profile_path.join("Desktop"));
+    }
+    if let Some(pub_dir) = std::env::var_os("PUBLIC") {
+        start_menu_roots.push(PathBuf::from(pub_dir).join("Desktop"));
+    }
+    if let Some(od) = std::env::var_os("OneDrive") {
+        start_menu_roots.push(PathBuf::from(od).join("Desktop"));
+    }
+    if let Some(od) = std::env::var_os("OneDriveConsumer") {
+        start_menu_roots.push(PathBuf::from(od).join("Desktop"));
+    }
 
     fn walk_shortcuts(
         dir: &Path,
@@ -1279,7 +1352,7 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
         seen_names: &mut HashSet<String>,
         apps: &mut Vec<IndexedApp>,
     ) {
-        if depth > 4 {
+        if depth > 6 {
             return;
         }
         let entries = match fs::read_dir(dir) {
@@ -1470,6 +1543,7 @@ pub fn build_full_search_index() -> SearchIndex {
     let apps = scan_linux_desktop_apps(home_dir.as_deref());
 
     let mut files = Vec::new();
+    let mut seen_paths = HashSet::new();
     let search_roots = get_user_search_directories(&home_dir);
 
     for root in search_roots {
@@ -1477,6 +1551,7 @@ pub fn build_full_search_index() -> SearchIndex {
             &root,
             0,
             MAX_DIR_DEPTH,
+            &mut seen_paths,
             &mut files,
         );
     }
@@ -1668,7 +1743,11 @@ pub fn search_index(
         .map(|(_, file)| {
             let mut item = build_file_search_result(file);
             if file.is_image {
-                item.thumbnail = get_or_generate_thumbnail(&file.path);
+                if let Ok(guard) = THUMBNAIL_CACHE.read() {
+                    if let Some(cached) = guard.get(&file.path) {
+                        item.thumbnail = cached.clone();
+                    }
+                }
             }
             item
         })
@@ -2193,6 +2272,39 @@ mod tests {
             let cached = get_or_generate_thumbnail(&img_path);
             assert!(cached.is_some());
             let _ = fs::remove_file(&img_path);
+        }
+    }
+    #[test]
+    fn test_walk_directory_files_deduplication() {
+        let temp_dir = std::env::temp_dir().join("lux_test_dedup");
+        let _ = fs::create_dir_all(&temp_dir);
+        let file1 = temp_dir.join("unique_file.txt");
+        let _ = fs::write(&file1, "sample");
+
+        let mut seen_paths = HashSet::new();
+        let mut indexed = Vec::new();
+
+        // First walk
+        walk_directory_files(&temp_dir, 0, 2, &mut seen_paths, &mut indexed);
+        let first_count = indexed.len();
+        assert!(first_count >= 1);
+
+        // Second walk with the same seen_paths must not add duplicates
+        walk_directory_files(&temp_dir, 0, 2, &mut seen_paths, &mut indexed);
+        assert_eq!(indexed.len(), first_count, "Duplicate paths must be skipped");
+
+        let _ = fs::remove_file(&file1);
+        let _ = fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_user_search_directories_no_duplicates() {
+        let home = get_user_home_dir();
+        let dirs = get_user_search_directories(&home);
+        let mut seen = HashSet::new();
+        for d in dirs {
+            let lower = d.to_string_lossy().to_lowercase();
+            assert!(seen.insert(lower), "Search directories must not contain duplicates");
         }
     }
 }
