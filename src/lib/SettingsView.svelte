@@ -1301,7 +1301,7 @@
           <div>
             <div class="about-title-row">
               <span class="about-title">Lux</span>
-              <span class="about-ver">v0.1.0-beta.1</span>
+              <span class="about-ver">v0.1.0-beta.2</span>
             </div>
             <p class="about-desc">
               Fast, keyboard-first desktop launcher and productivity tool for Windows.
