@@ -1350,7 +1350,7 @@
   role="dialog"
   aria-label="Lux command palette"
 >
-  <div class="bar" id="bar" data-tauri-drag-region>
+  <div class="bar" id="bar" data-tauri-drag-region="deep">
     {#if activeFilter !== "all"}
       <button
         type="button"
@@ -1850,7 +1850,7 @@
     </div>
   </div>
 
-  <div class="foot" data-tauri-drag-region>
+  <div class="foot" data-tauri-drag-region="deep">
     <div class="logo" aria-label="Lux">
       <svg viewBox="0 0 64 64" width="12" height="12" fill="currentColor">
         <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
