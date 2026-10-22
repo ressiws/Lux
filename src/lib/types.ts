@@ -60,6 +60,7 @@ export interface SearchResultItem {
 export interface SearchResponse {
   readonly apps: readonly SearchResultItem[];
   readonly files: readonly SearchResultItem[];
+  readonly backend?: "everything" | "native" | string;
 }
 
 export interface LauncherSection {
@@ -96,6 +97,7 @@ export interface IndexStats {
   readonly totalFiles: number;
   readonly isIndexed: boolean;
   readonly isIndexing?: boolean;
+  readonly backend?: "everything" | "native" | string;
 }
 
 export type ClipboardKind = "text" | "link" | "image" | "file" | "color";

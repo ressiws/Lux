@@ -78,6 +78,8 @@ const EXCLUDED_APP_PATTERNS: &[&str] = &[
 pub struct SearchResponse {
     pub apps: Vec<SearchResultItem>,
     pub files: Vec<SearchResultItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2263,7 +2265,19 @@ pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
             build_full_search_index()
         };
         let total_apps = index.apps.len();
-        let total_files = index.files.len();
+        let total_files = if is_everything {
+            if let Some(state) = app_handle.try_state::<SearchState>() {
+                if let Ok(guard) = state.everything.lock() {
+                    guard.as_ref().and_then(|mgr| mgr.get_total_database_items()).unwrap_or(0) as usize
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            index.files.len()
+        };
 
         if let Some(state) = app_handle.try_state::<SearchState>()
             && let Ok(mut lock) = state.index.write()

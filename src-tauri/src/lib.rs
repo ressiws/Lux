@@ -38,39 +38,55 @@ fn search_launcher(
 ) -> search::SearchResponse {
     let trimmed = query.trim();
 
-    if state.is_everything_active() {
-        let apps = match state.index.read() {
-            Ok(guard) => search::search_apps(&guard.apps, trimmed),
-            Err(poisoned) => search::search_apps(&poisoned.into_inner().apps, trimmed),
+    let apps = match state.index.read() {
+        Ok(guard) => search::search_apps(&guard.apps, trimmed),
+        Err(poisoned) => search::search_apps(&poisoned.into_inner().apps, trimmed),
+    };
+
+    if trimmed.is_empty() {
+        return search::SearchResponse {
+            apps,
+            files: Vec::new(),
+            backend: None,
         };
+    }
 
-        if trimmed.is_empty() {
-            return search::SearchResponse {
-                apps,
-                files: Vec::new(),
-            };
-        }
+    let everything_result = if state.is_everything_active() {
+        let guard = state.everything.lock().ok();
+        guard.and_then(|g| {
+            g.as_ref().map(|mgr| mgr.search(trimmed, 50))
+        })
+    } else {
+        None
+    };
 
-        let everything_files = {
-            let guard = state.everything.lock().ok();
-            guard.and_then(|g| {
-                g.as_ref().and_then(|mgr| mgr.search(trimmed, 50).ok())
-            })
-        };
-
-        if let Some(mut files) = everything_files {
-            let app_paths: std::collections::HashSet<String> =
-                apps.iter().map(|a| a.path.clone()).collect();
-            files.retain(|f| !app_paths.contains(&f.path));
-            return search::SearchResponse { apps, files };
+    if let Some(res) = everything_result {
+        match res {
+            Ok(mut files) => {
+                let app_paths: std::collections::HashSet<String> =
+                    apps.iter().map(|a| a.path.clone()).collect();
+                files.retain(|f| !app_paths.contains(&f.path));
+                return search::SearchResponse {
+                    apps,
+                    files,
+                    backend: Some("everything".to_string()),
+                };
+            }
+            Err(err) => {
+                eprintln!("[Search Backend] Everything search failed for query '{trimmed}': {err}. Falling back to native search index.");
+            }
         }
     }
 
-    let (apps, files) = match state.index.read() {
+    let (_, files) = match state.index.read() {
         Ok(guard) => search::search_index(&guard, &query),
         Err(poisoned) => search::search_index(&poisoned.into_inner(), &query),
     };
-    search::SearchResponse { apps, files }
+    search::SearchResponse {
+        apps,
+        files,
+        backend: Some("native".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -82,7 +98,11 @@ fn browse_launcher(
         Ok(guard) => search::browse_index(&guard, &category),
         Err(poisoned) => search::browse_index(&poisoned.into_inner(), &category),
     };
-    search::SearchResponse { apps, files }
+    search::SearchResponse {
+        apps,
+        files,
+        backend: Some("native".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -150,16 +170,30 @@ struct IndexStats {
     total_files: usize,
     is_indexed: bool,
     is_indexing: bool,
+    backend: &'static str,
 }
 
 #[tauri::command]
 fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
     let guard = state.index.read().unwrap_or_else(|p| p.into_inner());
+    let (total_files, backend) = if state.is_everything_active() {
+        let count = {
+            let everything_guard = state.everything.lock().ok();
+            everything_guard
+                .and_then(|g| g.as_ref().and_then(|mgr| mgr.get_total_database_items()))
+                .unwrap_or(guard.files.len() as u32) as usize
+        };
+        (count, "everything")
+    } else {
+        (guard.files.len(), "native")
+    };
+
     IndexStats {
         total_apps: guard.apps.len(),
-        total_files: guard.files.len(),
+        total_files,
         is_indexed: guard.is_indexed,
         is_indexing: state.is_indexing(),
+        backend,
     }
 }
 

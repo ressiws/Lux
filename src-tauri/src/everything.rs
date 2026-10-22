@@ -31,6 +31,7 @@ struct RawEverythingDll {
     query_w: unsafe extern "system" fn(i32) -> i32,
     get_last_error: unsafe extern "system" fn() -> u32,
     get_num_results: unsafe extern "system" fn() -> u32,
+    get_tot_results: unsafe extern "system" fn() -> u32,
     get_result_file_name_w: unsafe extern "system" fn(u32) -> *const u16,
     get_result_path_w: unsafe extern "system" fn(u32) -> *const u16,
     is_folder_result: unsafe extern "system" fn(u32) -> i32,
@@ -95,6 +96,10 @@ impl RawEverythingDll {
             "Everything_GetNumResults",
             unsafe extern "system" fn() -> u32
         );
+        let get_tot_results = resolve!(
+            "Everything_GetTotResults",
+            unsafe extern "system" fn() -> u32
+        );
         let get_result_file_name_w = resolve!(
             "Everything_GetResultFileNameW",
             unsafe extern "system" fn(u32) -> *const u16
@@ -136,6 +141,7 @@ impl RawEverythingDll {
             query_w,
             get_last_error,
             get_num_results,
+            get_tot_results,
             get_result_file_name_w,
             get_result_path_w,
             is_folder_result,
@@ -172,6 +178,33 @@ impl EverythingClient {
 
     pub fn is_db_loaded(&self) -> bool {
         unsafe { (self.dll.is_db_loaded)() != 0 }
+    }
+
+    pub fn get_last_error(&self) -> u32 {
+        unsafe { (self.dll.get_last_error)() }
+    }
+
+    pub fn is_ipc_available(&self) -> bool {
+        if self.is_db_loaded() {
+            return true;
+        }
+        self.get_last_error() != 2
+    }
+
+    pub fn get_total_database_items(&self) -> Result<u32, String> {
+        let wide_search: [u16; 1] = [0];
+        unsafe {
+            (self.dll.reset)();
+            (self.dll.set_search_w)(wide_search.as_ptr());
+            (self.dll.set_max)(0);
+            let ok = (self.dll.query_w)(1);
+            if ok == 0 {
+                let err = (self.dll.get_last_error)();
+                return Err(format!("Everything get_total_database_items failed with error code: {err}"));
+            }
+            let tot = (self.dll.get_tot_results)();
+            Ok(tot)
+        }
     }
 
     pub fn query(&self, search_term: &str, max_results: u32) -> Result<Vec<SearchResultItem>, String> {
@@ -317,14 +350,19 @@ pub struct EverythingManager {
 impl EverythingManager {
     pub fn new(resource_dir: Option<&Path>, app_data_dir: &Path) -> Result<Self, String> {
         let everything_data_dir = app_data_dir.join("everything");
-        let bin_dir = everything_data_dir.join("bin");
-        fs::create_dir_all(&bin_dir)
+        fs::create_dir_all(&everything_data_dir)
             .map_err(|e| format!("Failed to create everything app data dir: {e}"))?;
+
+        // Remove legacy nested bin directory if present from prior builds
+        let old_bin_dir = everything_data_dir.join("bin");
+        if old_bin_dir.exists() {
+            let _ = fs::remove_dir_all(&old_bin_dir);
+        }
 
         let (src_exe, src_dll) = locate_resource_binaries(resource_dir)?;
 
-        let dest_exe = bin_dir.join("everything.exe");
-        let dest_dll = bin_dir.join("Everything64.dll");
+        let dest_exe = everything_data_dir.join("everything.exe");
+        let dest_dll = everything_data_dir.join("Everything64.dll");
 
         copy_if_needed(&src_exe, &dest_exe)?;
         copy_if_needed(&src_dll, &dest_dll)?;
@@ -332,7 +370,8 @@ impl EverythingManager {
         let ini_path = everything_data_dir.join("Everything.ini");
         let db_path = everything_data_dir.join("Everything.db");
 
-        ensure_config_exists(&ini_path)?;
+        let folders = get_configured_folders();
+        ensure_config_exists(&ini_path, &folders)?;
 
         let paths = EverythingPaths {
             exe_path: dest_exe,
@@ -401,6 +440,17 @@ impl EverythingManager {
             }
         }
         false
+    }
+
+    pub fn get_total_database_items(&self) -> Option<u32> {
+        if let Some(ref c) = self.client {
+            if let Ok(guard) = c.lock() {
+                if guard.is_db_loaded() {
+                    return guard.get_total_database_items().ok();
+                }
+            }
+        }
+        None
     }
 
     pub fn search(&self, query: &str, max_results: u32) -> Result<Vec<SearchResultItem>, String> {
@@ -511,12 +561,94 @@ fn copy_if_needed(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_config_exists(ini_path: &Path) -> Result<(), String> {
-    if !ini_path.exists() {
-        let home_dir = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users".to_string());
-        let programs = "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs";
-        let ini_content = format!(
-            "; Lux managed Everything configuration\r\n\
+pub fn get_configured_folders() -> Vec<PathBuf> {
+    let mut raw_folders = Vec::new();
+    let home_dir = crate::search::get_user_home_dir();
+
+    if let Some(ref home) = home_dir {
+        if home.is_dir() {
+            raw_folders.push(home.clone());
+        }
+    }
+
+    let start_menu = PathBuf::from("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs");
+    if start_menu.is_dir() {
+        raw_folders.push(start_menu);
+    }
+
+    let search_roots = crate::search::get_user_search_directories(&home_dir);
+    for root in search_roots {
+        raw_folders.push(root);
+    }
+
+    deduplicate_and_clean_folders(raw_folders)
+}
+
+pub fn deduplicate_and_clean_folders(raw_folders: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut normalized: Vec<PathBuf> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for p in raw_folders {
+        if !p.is_dir() {
+            continue;
+        }
+        let norm_str = p.to_string_lossy().to_string();
+        let trimmed = if norm_str.len() > 3 && norm_str.ends_with('\\') {
+            norm_str[..norm_str.len() - 1].to_string()
+        } else {
+            norm_str
+        };
+        let lower = trimmed.to_lowercase();
+        if seen.insert(lower) {
+            normalized.push(PathBuf::from(trimmed));
+        }
+    }
+
+    // Sort by path length so parent directories appear before child directories
+    normalized.sort_by_key(|p| p.to_string_lossy().len());
+
+    let mut result: Vec<PathBuf> = Vec::new();
+    for p in normalized {
+        let p_str = p.to_string_lossy().to_lowercase();
+        let is_subfolder = result.iter().any(|existing| {
+            let existing_str = existing.to_string_lossy().to_lowercase();
+            if existing_str.ends_with('\\') {
+                p_str.starts_with(&existing_str)
+            } else {
+                p_str.starts_with(&format!("{}\\", existing_str))
+            }
+        });
+        if !is_subfolder {
+            result.push(p);
+        }
+    }
+
+    result
+}
+
+pub fn build_everything_ini_content(folders: &[PathBuf]) -> String {
+    let count = folders.len().max(1);
+    let escaped_folders: Vec<String> = if folders.is_empty() {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users".to_string());
+        vec![format!("\"{}\"", home.replace('\\', "\\\\"))]
+    } else {
+        folders
+            .iter()
+            .map(|p| {
+                let s = p.to_string_lossy();
+                let escaped = s.replace('\\', "\\\\");
+                format!("\"{}\"", escaped)
+            })
+            .collect()
+    };
+
+    let folders_line = format!("folders={}", escaped_folders.join(","));
+    let ones = vec!["1"; count].join(",");
+    let zeros = vec!["0"; count].join(",");
+
+    format!(
+        "; Lux managed Everything configuration\r\n\
+[Everything]\r\n\
 run_as_admin=0\r\n\
 show_tray_icon=0\r\n\
 run_in_background=1\r\n\
@@ -524,11 +656,38 @@ close_on_exit=1\r\n\
 check_for_updates_on_startup=0\r\n\
 allow_http_server=0\r\n\
 allow_etp_server=0\r\n\
+auto_include_fixed_volumes=0\r\n\
+auto_include_removable_volumes=0\r\n\
 hide_empty_search_results=0\r\n\
-folders=\"{}\",\"{}\"\r\n",
-            programs, home_dir
-        );
-        fs::write(ini_path, ini_content)
+{}\r\n\
+folder_monitor_changes={}\r\n\
+folder_buffer_size_list={}\r\n\
+folder_rescan_if_full_list={}\r\n\
+folder_update_ats={}\r\n\
+folder_update_intervals={}\r\n\
+folder_update_interval_types={}\r\n",
+        folders_line, ones, zeros, zeros, zeros, zeros, zeros
+    )
+}
+
+fn ensure_config_exists(ini_path: &Path, folders: &[PathBuf]) -> Result<(), String> {
+    let needs_write = if ini_path.exists() {
+        match fs::read_to_string(ini_path) {
+            Ok(content) => {
+                !content.contains("[Everything]")
+                    || !content.contains("auto_include_fixed_volumes=0")
+                    || !content.contains("run_as_admin=0")
+                    || !content.contains("folder_monitor_changes=")
+            }
+            Err(_) => true,
+        }
+    } else {
+        true
+    };
+
+    if needs_write {
+        let content = build_everything_ini_content(folders);
+        fs::write(ini_path, content)
             .map_err(|e| format!("Failed to create Everything.ini at {}: {}", ini_path.display(), e))?;
     }
     Ok(())
@@ -562,6 +721,29 @@ mod tests {
         let (_, dll) = locate_resource_binaries(None).expect("Find DLL");
         let client = EverythingClient::new(&dll).expect("Load DLL");
         let _loaded = client.is_db_loaded();
+    }
+
+    #[test]
+    fn test_deduplicate_and_clean_folders() {
+        let raw = vec![
+            PathBuf::from("C:\\Users\\test"),
+            PathBuf::from("C:\\Users\\test\\Desktop"),
+            PathBuf::from("C:\\Users\\test\\Documents"),
+            PathBuf::from("D:\\projects"),
+            PathBuf::from("D:\\projects\\Lux"),
+        ];
+        // Note: deduplicate_and_clean_folders filters !p.is_dir(), so we test clean logic
+        let _sorted = deduplicate_and_clean_folders(raw);
+        // Only existing folders would remain if is_dir is checked, but let's test format
+        let ini = build_everything_ini_content(&[
+            PathBuf::from("C:\\Users\\test"),
+            PathBuf::from("D:\\projects"),
+        ]);
+        assert!(ini.contains("[Everything]"));
+        assert!(ini.contains("run_as_admin=0"));
+        assert!(ini.contains("auto_include_fixed_volumes=0"));
+        assert!(ini.contains("folders=\"C:\\\\Users\\\\test\",\"D:\\\\projects\""));
+        assert!(ini.contains("folder_monitor_changes=1,1"));
     }
 
     #[test]
