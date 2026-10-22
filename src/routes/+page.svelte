@@ -23,7 +23,6 @@
     openSettings,
     openTarget,
     browseLauncher,
-    getImageThumbnail,
     openTargetAsAdmin,
     reindex,
     revealItemInFolder,
@@ -177,15 +176,6 @@
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
   );
-  const showPreview = $derived(
-    Boolean(
-      selectedItem &&
-        settings.preview &&
-        selectedItem.category !== "calc"
-        && selectedItem.category !== "fb"
-        && (isBrowseMode || !isIdle),
-    ),
-  );
   const showEmptyState = $derived(
     (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
       (effectiveQuery.trim().length > 0 || isBrowseMode),
@@ -196,37 +186,6 @@
   let collapseTimer: ReturnType<typeof setTimeout> | undefined;
 
   const shouldExpand = $derived(!isIdle);
-
-  let previewThumbnailUrl = $state<string | undefined>(undefined);
-  let previewImageFailed = $state(false);
-
-  $effect(() => {
-    const item = selectedItem;
-    previewImageFailed = false;
-    if (item && item.isImage) {
-      if (item.thumbnail) {
-        previewThumbnailUrl = item.thumbnail;
-      } else if (item.path) {
-        previewThumbnailUrl = undefined;
-        const targetPath = item.path;
-        void getImageThumbnail(targetPath).then((thumb) => {
-          if (selectedItem?.path === targetPath) {
-            if (thumb) {
-              previewThumbnailUrl = thumb;
-            } else {
-              previewImageFailed = true;
-            }
-          }
-        });
-      } else {
-        previewThumbnailUrl = undefined;
-        previewImageFailed = true;
-      }
-    } else {
-      previewThumbnailUrl = undefined;
-      previewImageFailed = false;
-    }
-  });
   let observer: IntersectionObserver | undefined;
   $effect(() => {
     if (sentinelElement && visibleCount < flatItems.length) {
@@ -1072,39 +1031,6 @@
     return CATEGORY_ICONS[item.category] ?? CATEGORY_ICONS.file;
   }
 
-  function getMetadata(item: LauncherItem): Array<[string, string]> {
-    if (item.category === "app") {
-      const location = item.location || item.path || "—";
-      return [
-        ["Kind", "Application"],
-        ["Location", location],
-        ["Version", item.version || "—"],
-        ["Size", item.size || "—"],
-      ];
-    }
-    if (item.category === "file") {
-      const kind = item.isImage
-        ? "Image"
-        : item.rightLabel && item.rightLabel !== "File"
-          ? item.rightLabel
-          : "File";
-      const location = item.location || item.path || "—";
-      return [
-        ["Kind", kind],
-        ["Location", location],
-        ["Size", item.size || "—"],
-      ];
-    }
-    if (item.category === "calc" && item.calc) {
-      return [
-        ["Kind", "Calculation"],
-        ["Expression", item.calc.expression],
-        ["Result", item.calc.value],
-      ];
-    }
-    return [];
-  }
-
   onMount(() => {
     applyThemeAndCaret(settings);
     focusSearchInput();
@@ -1298,7 +1224,6 @@
   id="win"
   class:idle={isIdle}
   class:collapsing={isCollapsing}
-  class:nopv={!showPreview}
   role="dialog"
   aria-label="Lux command palette"
 >
@@ -1837,75 +1762,6 @@
         <div class="sentinel" bind:this={sentinelElement} aria-hidden="true"></div>
       {/if}
     </div>
-
-    {#if showPreview && selectedItem}
-      <aside id="pv" class="pv" aria-label="Preview">
-        {#if selectedItem.isImage && selectedItem.thumbnail}
-          <img class="pbig" src={selectedItem.thumbnail} alt="" style="object-fit: contain;" />
-        {:else}
-          <div class="pico">
-            {#if selectedItem.category === "app"}
-              {#if selectedItem.icon}
-                <img
-                  class="ico-img"
-                  src={selectedItem.icon}
-                  alt=""
-                  style="width: 68px; height: 68px; border-radius: 18px; object-fit: contain;"
-                />
-              {:else}
-                <div
-                  class="ico g"
-                  style="width: 68px; height: 68px; border-radius: 18px; background: var(--chip);"
-                >
-                  <svg
-                    width="30"
-                    height="30"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.7"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="3" y="3" width="18" height="18" rx="4" />
-                    <path d="M3 9h18M9 21V9" />
-                  </svg>
-                </div>
-              {/if}
-            {:else if selectedItem.icon}
-              <img
-                class="ico-img"
-                src={selectedItem.icon}
-                alt=""
-                style="width: 68px; height: 68px; border-radius: 18px; object-fit: contain;"
-              />
-            {:else}
-              <div
-                class="ico g"
-                style="width: 68px; height: 68px; border-radius: 18px;"
-              >
-                <svg
-                  width="30"
-                  height="30"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d={getCategoryIconPath(selectedItem)} />
-                </svg>
-              </div>
-            {/if}
-          </div>
-        {/if}
-        <div class="pt">{selectedItem.name}</div>
-        {#each getMetadata(selectedItem) as [k, v] (k)}
-          <div class="pm"><span>{k}</span><span>{v}</span></div>
-        {/each}
-      </aside>
-    {/if}
   </div>
 
   <div class="foot">
@@ -2529,76 +2385,6 @@
     overflow-y: auto;
     padding: 6px 10px 10px;
     scrollbar-width: thin;
-  }
-
-  .pv {
-    width: 250px;
-    flex: none;
-    border-left: 1px solid var(--line);
-    padding: 16px;
-    overflow: hidden;
-    box-sizing: border-box;
-  }
-
-  .nopv .pv {
-    display: none;
-  }
-
-  .pbig {
-    height: 140px;
-    width: 100%;
-    object-fit: cover;
-    border-radius: 10px;
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
-    margin-bottom: 12px;
-    display: block;
-  }
-
-  .pico {
-    display: grid;
-    place-items: center;
-    height: 110px;
-    margin-bottom: 8px;
-  }
-
-  .pico .ico {
-    width: 68px;
-    height: 68px;
-    border-radius: 18px;
-    font-size: 28px;
-  }
-
-  .pico .ico-img {
-    width: 68px;
-    height: 68px;
-    border-radius: 18px;
-  }
-
-  .pico .ico svg {
-    width: 30px;
-    height: 30px;
-  }
-
-  .pt {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 8px;
-    word-break: break-word;
-  }
-
-  .pm {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 4px 0;
-    font-size: 12px;
-    color: var(--mut);
-  }
-
-  .pm span:last-child {
-    color: var(--fg);
-    text-align: right;
-    word-break: break-all;
   }
 
   .sec {

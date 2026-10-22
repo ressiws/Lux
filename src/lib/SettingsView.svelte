@@ -1165,21 +1165,6 @@
     {:else if activeCategory === "features"}
       <div class="srow">
         <div>
-          <b>Preview Panel</b>
-          <small class="desc">Show details, metadata, and quick actions for the selected item</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.preview}
-          aria-label="Preview Panel"
-          onclick={() => setSetting("preview", !settings.preview)}
-        ></button>
-      </div>
-
-      <div class="srow">
-        <div>
           <b>Indexing Progress Bar</b>
           <small class="desc">Show subtle progress indicator while background indexing</small>
         </div>
