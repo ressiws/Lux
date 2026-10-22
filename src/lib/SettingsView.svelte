@@ -1435,7 +1435,7 @@
           </div>
           <div class="help-row">
             <span class="help-desc">Reveal Item in File Explorer</span>
-            <span class="help-keys"><kbd>Ctrl</kbd> + <kbd>O</kbd></span>
+            <span class="help-keys"><kbd>Ctrl</kbd> + <kbd>↵</kbd></span>
           </div>
           <div class="help-row">
             <span class="help-desc">Close / Return to All Categories</span>

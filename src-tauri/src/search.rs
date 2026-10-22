@@ -2076,8 +2076,12 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
 fn reveal_in_folder_internal(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        // Explorer needs one raw `/select,"<path>"` argument. A normally escaped argument
+        // is not parsed and Explorer falls back to opening the Documents folder.
+        let normalized = path.replace('/', "\\");
         std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", path))
+            .raw_arg(format!("/select,\"{}\"", normalized))
             .spawn()
             .map_err(|err| format!("Failed to reveal item in Explorer: {err}"))?;
         Ok(())
