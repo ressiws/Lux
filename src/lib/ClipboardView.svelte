@@ -473,6 +473,15 @@
     }
   }
 
+  function handleRowContextMenu(event: MouseEvent, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedIndex = index;
+    filterMenuOpen = false;
+    selectedActionIndex = 0;
+    actionsOpen = true;
+  }
+
   function handleKeydown(e: KeyboardEvent): void {
     if (confirmDialogState.open) {
       if (e.key === "Escape" && !isConfirmSubmitting) {
@@ -707,6 +716,12 @@
     });
 
     window.addEventListener("keydown", handleKeydown);
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
     window.addEventListener("copy", handleCopy);
     const unregisterDrag = registerWindowDrag();
 
@@ -716,6 +731,7 @@
       unlisten?.();
       unlistenSettings?.();
       window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("contextmenu", handleContextMenu);
       window.removeEventListener("copy", handleCopy);
     };
   });
@@ -883,6 +899,7 @@
                 }
               }}
               onclick={() => void pasteItem(item)}
+              oncontextmenu={(e) => handleRowContextMenu(e, globalIndex)}
             >
               {#if item.kind === "color"}
                 <div class="sw">

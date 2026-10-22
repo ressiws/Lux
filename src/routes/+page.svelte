@@ -1052,6 +1052,13 @@
     }
   }
 
+  function handleRowContextMenu(event: MouseEvent, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedIndex = index;
+    openActionsPopover();
+  }
+
   function handleRowClick(index: number): void {
     if (actionsOpen) {
       closeActionsPopover();
@@ -1277,7 +1284,13 @@
     };
 
     window.addEventListener("focus", handleWindowFocus);
-    window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("keydown", handleKeydown);
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
     let unlistenOpenPreview: (() => void) | undefined;
     let unlistenClosePreview: (() => void) | undefined;
     if (windowLabel !== "preview") {
@@ -1311,7 +1324,8 @@
       unlistenSettings?.();
       unlistenFeatures?.();
       window.removeEventListener("focus", handleWindowFocus);
-      window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("contextmenu", handleContextMenu);
     };
   });
 </script>
@@ -1692,7 +1706,8 @@
                 aria-selected={isSelected}
                 onmousedown={preventFocusLossOnMouseDown}
                 onmousemove={() => handleRowHover(itemIndex)}
-                onclick={() => handleRowClick(itemIndex)}
+                onclick={() => handleRowClick(itemIndex)}
+                oncontextmenu={(e) => handleRowContextMenu(e, itemIndex)}
               >
                 {#if disp.type === "thumb" && disp.src}
                   <img class="thumb" src={disp.src} alt="" />
@@ -1738,7 +1753,8 @@
                 aria-selected={isSelected}
                 onmousedown={preventFocusLossOnMouseDown}
                 onmousemove={() => handleRowHover(itemIndex)}
-                onclick={() => handleRowClick(itemIndex)}
+                onclick={() => handleRowClick(itemIndex)}
+                oncontextmenu={(e) => handleRowContextMenu(e, itemIndex)}
               >
                 <div class="a">
                   <small>{item.calc.expression}</small>
@@ -1780,7 +1796,8 @@
                 aria-selected={isSelected}
                 onmousedown={preventFocusLossOnMouseDown}
                 onmousemove={() => handleRowHover(itemIndex)}
-                onclick={() => handleRowClick(itemIndex)}
+                onclick={() => handleRowClick(itemIndex)}
+                oncontextmenu={(e) => handleRowContextMenu(e, itemIndex)}
               >
                 {#if disp.type === "thumb" && disp.src}
                   <img class="thumb" src={disp.src} alt="" />

@@ -9,7 +9,8 @@ pub mod shortcuts;
 pub mod tray;
 pub mod window;
 
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, State, WindowEvent};
 use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
@@ -260,6 +261,30 @@ fn hide_settings(app: AppHandle) -> Result<(), String> {
     window::hide_settings_window(&app)
 }
 
+fn get_first_run_marker_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.path().app_local_data_dir().ok().map(|p| p.join(".first_run_completed"))
+}
+
+#[tauri::command]
+fn is_first_run(app: AppHandle) -> bool {
+    if let Some(path) = get_first_run_marker_path(&app) {
+        !path.exists()
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+fn complete_first_run(app: AppHandle) -> Result<(), String> {
+    if let Some(path) = get_first_run_marker_path(&app) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, b"1").map_err(|e| format!("Failed to mark first run completed: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn notify_frontend_ready(
     app: AppHandle,
@@ -270,7 +295,11 @@ fn notify_frontend_ready(
         state.set_idle_height(h);
     }
     state.mark_frontend_ready();
-    if state.should_show_on_ready() {
+    if state.should_show_welcome_on_ready() {
+        state.set_show_welcome_on_ready(false);
+        window::show_settings_window(&app)?;
+        let _ = app.emit("lux://show-welcome", ());
+    } else if state.should_show_on_ready() {
         state.set_show_on_ready(false);
         window::show_launcher_window(&app)?;
     }
@@ -348,7 +377,9 @@ pub fn run() {
             hide_preview,
             toggle_preview,
             get_file_preview,
-            is_preview_visible
+            is_preview_visible,
+            is_first_run,
+            complete_first_run
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -456,7 +487,17 @@ pub fn run() {
                 search::start_background_indexing(handle.clone());
             }
 
-            if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
+            let first_run = if let Some(path) = get_first_run_marker_path(handle) {
+                !path.exists()
+            } else {
+                false
+            };
+
+            if first_run {
+                if let Some(state) = handle.try_state::<LauncherState>() {
+                    state.set_show_welcome_on_ready(true);
+                }
+            } else if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
                 && let Some(state) = handle.try_state::<LauncherState>()
             {
                 if state.is_frontend_ready() {

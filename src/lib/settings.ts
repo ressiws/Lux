@@ -1,6 +1,7 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type SettingsCategory =
+  | "welcome"
   | "general"
   | "appearance"
   | "search"
@@ -121,4 +122,22 @@ export function getIdleLauncherHeight(
     default:
       return 64;
   }
+}
+
+export const WELCOME_COMPLETED_KEY = "lux-welcome-completed";
+
+export function isWelcomeCompleted(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(WELCOME_COMPLETED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setWelcomeCompleted(completed: boolean): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(WELCOME_COMPLETED_KEY, completed ? "true" : "false");
+  } catch {}
 }

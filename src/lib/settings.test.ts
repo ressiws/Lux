@@ -5,6 +5,10 @@ import {
   applyThemeAndCaret,
   getIdleLauncherHeight,
   SETTINGS_STORAGE_KEY,
+  isWelcomeCompleted,
+  setWelcomeCompleted,
+  WELCOME_COMPLETED_KEY,
+  type SettingsCategory,
   type SettingsState,
 } from "./settings";
 
@@ -170,6 +174,23 @@ console.log("Running Settings and Density unit tests...");
     true,
     "normal is smaller than comfortable",
   );
+}
+
+// 10. Welcome completion persistence
+{
+  localStorage.clear();
+  assertEqual(isWelcomeCompleted(), false, "initially welcome is not completed");
+  setWelcomeCompleted(true);
+  assertEqual(isWelcomeCompleted(), true, "welcome is completed after setting");
+  assertEqual(localStorage.getItem(WELCOME_COMPLETED_KEY), "true", "storage key matches");
+  setWelcomeCompleted(false);
+  assertEqual(isWelcomeCompleted(), false, "welcome can be reset");
+}
+
+// 11. Welcome category typing
+{
+  const cat: SettingsCategory = "welcome";
+  assertEqual(cat, "welcome", "welcome is a valid SettingsCategory");
 }
 
 console.log("Settings and Density unit tests passed successfully.");

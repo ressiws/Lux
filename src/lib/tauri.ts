@@ -259,3 +259,25 @@ export async function onClosePreview(handler: () => void): Promise<UnlistenFn> {
 export async function isPreviewVisible(): Promise<boolean> {
   return invoke<boolean>("is_preview_visible");
 }
+
+export const EVENT_SHOW_WELCOME = "lux://show-welcome";
+
+export async function isFirstRun(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_first_run");
+  } catch {
+    return false;
+  }
+}
+
+export async function completeFirstRun(): Promise<void> {
+  try {
+    await invoke<void>("complete_first_run");
+  } catch {}
+}
+
+export async function onShowWelcome(handler: () => void): Promise<UnlistenFn> {
+  return listen(EVENT_SHOW_WELCOME, () => {
+    handler();
+  });
+}

@@ -50,7 +50,8 @@ pub struct LauncherState {
     shown_at: Mutex<Option<Instant>>,
     current_mode: Mutex<WindowMode>,
     frontend_ready: AtomicBool,
-    show_on_ready: AtomicBool,
+    show_on_ready: AtomicBool,
+    show_welcome_on_ready: AtomicBool,
     settings_shown_at: Mutex<Option<Instant>>,
     settings_has_gained_focus: AtomicBool,
     saved_position: Mutex<Option<PersistentPosition>>,
@@ -74,7 +75,8 @@ impl LauncherState {
             shown_at: Mutex::new(None),
             current_mode: Mutex::new(WindowMode::Launcher),
             frontend_ready: AtomicBool::new(false),
-            show_on_ready: AtomicBool::new(false),
+            show_on_ready: AtomicBool::new(false),
+            show_welcome_on_ready: AtomicBool::new(false),
             settings_shown_at: Mutex::new(None),
             settings_has_gained_focus: AtomicBool::new(false),
             saved_position: Mutex::new(saved_position),
@@ -302,6 +304,14 @@ impl LauncherState {
         self.frontend_ready.load(Ordering::SeqCst)
     }
 
+    pub fn set_show_welcome_on_ready(&self, show: bool) {
+        self.show_welcome_on_ready.store(show, Ordering::SeqCst);
+    }
+
+    pub fn should_show_welcome_on_ready(&self) -> bool {
+        self.show_welcome_on_ready.load(Ordering::SeqCst)
+    }
+
     pub fn set_show_on_ready(&self, show: bool) {
         self.show_on_ready.store(show, Ordering::SeqCst);
     }
@@ -493,7 +503,7 @@ pub fn target_window_width(mode: WindowMode) -> f64 {
 }
 
 pub const SETTINGS_WINDOW_LABEL: &str = "settings";
-pub const SETTINGS_WIDTH: f64 = 480.0;
+pub const SETTINGS_WIDTH: f64 = 700.0;
 pub const SETTINGS_HEIGHT: f64 = 540.0;
 
 pub const PREVIEW_WINDOW_LABEL: &str = "preview";
@@ -1030,7 +1040,8 @@ pub fn show_launcher_window_explicit<R: Runtime>(app: &AppHandle<R>) -> Result<(
     show_launcher_window(app)
 }
 
-pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let _ = hide_launcher_window(app);
     let window = app
         .get_webview_window(SETTINGS_WINDOW_LABEL)
         .ok_or_else(|| "Settings window is not available.".to_string())?;
@@ -1196,6 +1207,26 @@ pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: boo
     }
 }
 
+pub fn toggle_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<LauncherState>() {
+        if !state.try_acquire_settings_toggle_cooldown() {
+            return Ok(());
+        }
+    }
+
+    let window = app
+        .get_webview_window(SETTINGS_WINDOW_LABEL)
+        .ok_or_else(|| "Settings window is not available.".to_string())?;
+
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+    if is_visible && !is_minimized {
+        hide_settings_window(app)
+    } else {
+        show_settings_window(app)
+    }
+}
+
 pub fn toggle_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if let Some(state) = app.try_state::<LauncherState>() {
         if !state.try_acquire_toggle_cooldown() {
