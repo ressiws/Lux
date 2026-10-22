@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod clipboard_filters;
 pub mod color;
+pub mod everything;
 pub mod features;
 pub mod search;
 pub mod shortcuts;
@@ -35,6 +36,36 @@ fn search_launcher(
     query: String,
     state: State<'_, search::SearchState>,
 ) -> search::SearchResponse {
+    let trimmed = query.trim();
+
+    if state.is_everything_active() {
+        let apps = match state.index.read() {
+            Ok(guard) => search::search_apps(&guard.apps, trimmed),
+            Err(poisoned) => search::search_apps(&poisoned.into_inner().apps, trimmed),
+        };
+
+        if trimmed.is_empty() {
+            return search::SearchResponse {
+                apps,
+                files: Vec::new(),
+            };
+        }
+
+        let everything_files = {
+            let guard = state.everything.lock().ok();
+            guard.and_then(|g| {
+                g.as_ref().and_then(|mgr| mgr.search(trimmed, 50).ok())
+            })
+        };
+
+        if let Some(mut files) = everything_files {
+            let app_paths: std::collections::HashSet<String> =
+                apps.iter().map(|a| a.path.clone()).collect();
+            files.retain(|f| !app_paths.contains(&f.path));
+            return search::SearchResponse { apps, files };
+        }
+    }
+
     let (apps, files) = match state.index.read() {
         Ok(guard) => search::search_index(&guard, &query),
         Err(poisoned) => search::search_index(&poisoned.into_inner(), &query),
@@ -295,6 +326,28 @@ pub fn run() {
             app.manage(clipboard_state);
 
             let search_state = search::SearchState::new();
+
+            // Initialize managed Everything search engine
+            let app_local_data = handle
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let resource_dir = handle.path().resource_dir().ok();
+
+            match everything::EverythingManager::new(resource_dir.as_deref(), &app_local_data) {
+                Ok(mut mgr) => {
+                    if let Err(err) = mgr.start_or_connect() {
+                        eprintln!("Warning: Failed to start Everything engine: {err}");
+                    }
+                    if let Ok(mut g) = search_state.everything.lock() {
+                        *g = Some(mgr);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Warning: Failed to initialize Everything manager: {err}");
+                }
+            }
+
             let index_path = search::get_search_index_path(handle);
             let home_dir = search::get_user_home_dir();
             let current_fingerprint = search::compute_discovery_fingerprint(&home_dir);
@@ -391,6 +444,13 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             shortcuts::unregister_all_shortcuts(app_handle);
+            if let Some(state) = app_handle.try_state::<search::SearchState>() {
+                if let Ok(mut g) = state.everything.lock() {
+                    if let Some(mut mgr) = g.take() {
+                        mgr.stop();
+                    }
+                }
+            }
         }
     });
 }

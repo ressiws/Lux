@@ -40,6 +40,13 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 if let Some(state) = app_handle.try_state::<LauncherState>() {
                     state.mark_quitting();
                 }
+                if let Some(state) = app_handle.try_state::<crate::search::SearchState>() {
+                    if let Ok(mut g) = state.everything.lock() {
+                        if let Some(mut mgr) = g.take() {
+                            mgr.stop();
+                        }
+                    }
+                }
                 shortcuts::unregister_all_shortcuts(app_handle);
                 app_handle.exit(0);
             }
