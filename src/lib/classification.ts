@@ -133,7 +133,7 @@ export function detectFileFormat(itemOrPath: string | LauncherItem | SearchResul
     path = itemOrPath;
   } else {
     path = itemOrPath.path || itemOrPath.name;
-    isFolder = itemOrPath.rightLabel === "Folder";
+    isFolder = itemOrPath.rightLabel === "Folder" || itemOrPath.rightLabel === "DIR";
     isImage = "isImage" in itemOrPath && Boolean(itemOrPath.isImage);
   }
 
@@ -419,7 +419,12 @@ export function classifyFile(item: LauncherItem | SearchResultItem): FileSubcate
     return cached;
   }
 
-  if (item.rightLabel === "Folder") {
+  if (
+    item.rightLabel === "Folder" ||
+    item.rightLabel === "DIR" ||
+    ("fileFormat" in item && item.fileFormat === "folder") ||
+    detectFileFormat(item) === "folder"
+  ) {
     fileCache.set(cacheKey, "folders");
     return "folders";
   }

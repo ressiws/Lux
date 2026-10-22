@@ -2260,7 +2260,29 @@ pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
             .map(|s| s.is_everything_active())
             .unwrap_or(false);
         let index = if is_everything {
-            build_apps_search_index()
+            let mut apps_index = build_apps_search_index();
+            if let Some(state) = app_handle.try_state::<SearchState>() {
+                if let Ok(guard) = state.index.read() {
+                    if !guard.files.is_empty() {
+                        apps_index.files = guard.files.clone();
+                    }
+                }
+            }
+            if apps_index.files.is_empty() {
+                let home_dir = get_user_home_dir();
+                let search_roots = get_user_search_directories(&home_dir);
+                let mut seen_paths = HashSet::new();
+                for root in search_roots {
+                    walk_directory_files(
+                        &root,
+                        0,
+                        MAX_DIR_DEPTH,
+                        &mut seen_paths,
+                        &mut apps_index.files,
+                    );
+                }
+            }
+            apps_index
         } else {
             build_full_search_index()
         };
@@ -2582,17 +2604,30 @@ mod tests {
                 size: None,
                 version: None,
             }],
-            files: vec![IndexedFile {
-                name: "test.pdf".to_string(),
-                subtitle: "Documents".to_string(),
-                path: PathBuf::from("C:\\test.pdf"),
-                location: "C:\\".to_string(),
-                is_image: false,
-                extension: "pdf".to_string(),
-                right_label: "PDF".to_string(),
-                size: None,
-                icon: None,
-            }],
+            files: vec![
+                IndexedFile {
+                    name: "Projects".to_string(),
+                    subtitle: "D:\\".to_string(),
+                    path: PathBuf::from("D:\\Projects"),
+                    location: "D:\\Projects".to_string(),
+                    is_image: false,
+                    extension: String::new(),
+                    right_label: "Folder".to_string(),
+                    size: None,
+                    icon: None,
+                },
+                IndexedFile {
+                    name: "test.pdf".to_string(),
+                    subtitle: "Documents".to_string(),
+                    path: PathBuf::from("C:\\test.pdf"),
+                    location: "C:\\".to_string(),
+                    is_image: false,
+                    extension: "pdf".to_string(),
+                    right_label: "PDF".to_string(),
+                    size: None,
+                    icon: None,
+                },
+            ],
             is_indexed: true,
         };
 
@@ -2603,8 +2638,11 @@ mod tests {
 
         let (apps, files) = browse_index(&index, "files");
         assert_eq!(apps.len(), 0);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].name, "test.pdf");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].name, "Projects");
+        assert_eq!(files[0].right_label, "Folder");
+        assert_eq!(files[1].name, "test.pdf");
+        assert_eq!(files[1].right_label, "PDF");
 
         let (apps, files) = browse_index(&index, "actions");
         assert_eq!(apps.len(), 0);

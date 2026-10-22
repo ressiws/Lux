@@ -1,7 +1,6 @@
 use std::ffi::{c_char, c_void};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
@@ -9,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use crate::search::{SearchResultItem, IMAGE_EXTENSIONS};
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const EVERYTHING_REQUEST_FILE_NAME: u32 = 0x00000001;
 const EVERYTHING_REQUEST_PATH: u32 = 0x00000002;
@@ -208,6 +206,9 @@ impl EverythingClient {
     }
 
     pub fn query(&self, search_term: &str, max_results: u32) -> Result<Vec<SearchResultItem>, String> {
+        if !self.is_db_loaded() {
+            return Err("Everything database is not loaded".to_string());
+        }
         let wide_search: Vec<u16> = search_term
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -279,6 +280,12 @@ impl EverythingClient {
                     None
                 };
 
+                let thumbnail = if is_image {
+                    crate::search::get_or_generate_thumbnail(Path::new(&full_path))
+                } else {
+                    None
+                };
+
                 items.push(SearchResultItem {
                     id: format!("file:{}", full_path),
                     category: "file".to_string(),
@@ -287,7 +294,7 @@ impl EverythingClient {
                     path: full_path,
                     location: dir_path,
                     icon: None,
-                    thumbnail: None,
+                    thumbnail,
                     color: None,
                     is_image,
                     right_label,
@@ -409,7 +416,7 @@ impl EverythingManager {
             .arg("-db")
             .arg(&self.paths.db_path)
             .arg("-startup")
-            .creation_flags(CREATE_NO_WINDOW);
+            ;
 
         let child = cmd
             .spawn()
@@ -454,6 +461,9 @@ impl EverythingManager {
     }
 
     pub fn search(&self, query: &str, max_results: u32) -> Result<Vec<SearchResultItem>, String> {
+        if !self.is_available() {
+            return Err("Everything engine is not available or database not loaded".to_string());
+        }
         let client = self
             .client
             .as_ref()
