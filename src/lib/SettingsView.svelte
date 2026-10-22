@@ -27,6 +27,7 @@
     type SettingsCategory,
     type SettingsState,
   } from "./settings";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import type {
     ClipboardEntry,
     ClipboardFiltersConfig,
@@ -316,12 +317,19 @@
     }
   }
 
-  async function handleClearClipboard(): Promise<void> {
+  let isClearingClipboard = $state(false);
+  let showClearConfirmDialog = $state(false);
+
+  async function handleConfirmClearClipboard(): Promise<void> {
+    isClearingClipboard = true;
     try {
       await clearClipboardHistory();
       clipboardCount = 0;
     } catch {
       // Ignore outside Tauri
+    } finally {
+      isClearingClipboard = false;
+      showClearConfirmDialog = false;
     }
   }
 
@@ -1156,7 +1164,9 @@
           <button
             class="btn-sub danger"
             type="button"
-            onclick={handleClearClipboard}
+            onclick={() => {
+              showClearConfirmDialog = true;
+            }}
           >
             Clear History
           </button>
@@ -1315,6 +1325,19 @@
       </div>
     {/if}
   </div>
+
+  <ConfirmDialog
+    open={showClearConfirmDialog}
+    title="Clear Clipboard History?"
+    message="Are you sure you want to clear your local clipboard history? Pinned items will be preserved."
+    confirmLabel="Clear History"
+    isDanger={true}
+    isSubmitting={isClearingClipboard}
+    onConfirm={handleConfirmClearClipboard}
+    onCancel={() => {
+      showClearConfirmDialog = false;
+    }}
+  />
 </div>
 
 <style>
