@@ -4,9 +4,11 @@ import {
   classifyAction,
   getAvailableSubcategories,
   clearClassificationCache,
+  detectFileFormat,
+  getFileFormatBadge,
 } from "./classification";
 import type { LauncherItem } from "./types";
-import { MOCK_ITEMS, MOCK_COMMANDS } from "./mock-data";
+import { MOCK_ITEMS, MOCK_COMMANDS, getItemDisplayIcon } from "./mock-data";
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -240,6 +242,53 @@ export function runClassificationTests(): number {
 
     const allSubcats = getAvailableSubcategories("all", MOCK_ITEMS);
     assertEqual(allSubcats.length, 0, "No subcategories when filter is all");
+  });
+  // 6. Format-aware file detection & icon precedence
+  check(() => {
+    assertEqual(detectFileFormat("report.pdf"), "pdf", "PDF file detection");
+    assertEqual(detectFileFormat("README.md"), "markdown", "Markdown file detection");
+    assertEqual(detectFileFormat("notes.txt"), "text", "Text file detection");
+    assertEqual(detectFileFormat("main.rs"), "code", "Rust file detection");
+    assertEqual(detectFileFormat("app.tsx"), "code", "TSX file detection");
+    assertEqual(detectFileFormat("archive.zip"), "archive", "ZIP file detection");
+    assertEqual(detectFileFormat("photo.png"), "image", "PNG file detection");
+    assertEqual(detectFileFormat("movie.mp4"), "video", "MP4 file detection");
+    assertEqual(detectFileFormat("song.mp3"), "audio", "MP3 file detection");
+    assertEqual(detectFileFormat("doc.docx"), "document", "DOCX file detection");
+    assertEqual(detectFileFormat("unknown.xyz"), "generic", "Generic file detection");
+
+    assertEqual(getFileFormatBadge("pdf"), "PDF", "PDF badge");
+    assertEqual(getFileFormatBadge("markdown"), "MD", "Markdown badge");
+    assertEqual(getFileFormatBadge("code"), "CODE", "Code badge");
+    assertEqual(getFileFormatBadge("archive"), "ZIP", "Archive badge");
+
+    // Icon precedence tests
+    const pdfItem: LauncherItem = {
+      category: "file",
+      name: "report.pdf",
+      subtitle: "",
+      keywords: "",
+      rightLabel: "PDF",
+      primaryLabel: "Open PDF",
+      actions: [],
+    };
+    const pdfIcon = getItemDisplayIcon(pdfItem);
+    assertEqual(pdfIcon.type, "format", "PDF uses format icon");
+    assertEqual(pdfIcon.badge, "PDF", "PDF display icon badge");
+
+    const imageWithThumb: LauncherItem = {
+      category: "file",
+      name: "photo.jpg",
+      subtitle: "",
+      keywords: "",
+      rightLabel: "JPG",
+      primaryLabel: "Open Image",
+      thumbnail: "data:image/jpeg;base64,123",
+      isImage: true,
+      actions: [],
+    };
+    const thumbIcon = getItemDisplayIcon(imageWithThumb);
+    assertEqual(thumbIcon.type, "thumb", "Image with thumbnail uses thumb type");
   });
 
   return passed;

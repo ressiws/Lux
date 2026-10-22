@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateMathExpression } from "./calculator";
-import { classifyApp, classifyFile, classifyAction } from "./classification";
+import { classifyApp, classifyFile, classifyAction, detectFileFormat, getFileFormatBadge } from "./classification";
+import type { FileFormatKind } from "./types";
 import type {
   HighlightParts,
   ItemAction,
@@ -362,6 +363,101 @@ export const CATEGORY_ICONS: Readonly<Record<string, string>> = {
   snip: "M5 7h14M5 12h14M5 17h8",
   fb: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c3 3 3 15 0 18 M12 3c-3 3-3 15 0 18",
 };
+
+export const FORMAT_ICONS: Readonly<Record<FileFormatKind, string>> = {
+  pdf: "M7 3h7l4 4v14H7z M14 3v4h4 M9 13h6 M9 17h4",
+  markdown: "M7 3h7l4 4v14H7z M14 3v4h4 M10 12l2 2 2-2 M12 10v4",
+  text: "M7 3h7l4 4v14H7z M14 3v4h4 M9 12h6 M9 15h6 M9 18h4",
+  code: "M7 3h7l4 4v14H7z M14 3v4h4 M11 13l-2 2 2 2 M13 13l2 2-2 2",
+  archive: "M4 5h16v14H4z M4 9h16 M10 5v4 M14 5v4 M11 11h2v3h-2z",
+  image: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M21 15l-5-5L5 21",
+  video: "M3 5h18v14H3z M10 9l5 3-5 3V9z",
+  audio: "M9 18V5l10-2v13 M6 18a3 3 0 1 0 3-3H9 M16 16a3 3 0 1 0 3-3h-3",
+  document: "M7 3h7l4 4v14H7z M14 3v4h4 M9 11h6 M9 14h6 M9 17h6",
+  folder: "M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z",
+  generic: "M7 3h7l4 4v14H7z M14 3v4h4",
+};
+
+export const FORMAT_COLORS: Readonly<Record<FileFormatKind, string>> = {
+  pdf: "#e05555",
+  markdown: "#42b983",
+  text: "#9da5b4",
+  code: "#4a8fd8",
+  archive: "#d19a66",
+  image: "#56b6c2",
+  video: "#e06c75",
+  audio: "#c678dd",
+  document: "#61afef",
+  folder: "#e5c07b",
+  generic: "#828997",
+};
+
+export function getFileFormatInfo(item: LauncherItem | SearchResultItem): {
+  kind: FileFormatKind;
+  iconPath: string;
+  badge: string;
+  color: string;
+} {
+  const kind = detectFileFormat(item);
+  const iconPath = FORMAT_ICONS[kind] ?? FORMAT_ICONS.generic;
+  const badge = getFileFormatBadge(kind);
+  const color = FORMAT_COLORS[kind] ?? FORMAT_COLORS.generic;
+  return { kind, iconPath, badge, color };
+}
+
+export interface ItemDisplayIcon {
+  type: "thumb" | "shell" | "format";
+  src?: string;
+  path?: string;
+  badge?: string;
+  color?: string;
+}
+
+export function getItemDisplayIcon(item: LauncherItem): ItemDisplayIcon {
+  if (item.category === "app") {
+    return item.icon
+      ? { type: "shell", src: item.icon }
+      : { type: "format", path: "M3 3h18v18H3z M3 9h18M9 21V9", color: "#4a8fd8" };
+  }
+
+  if (item.category === "file") {
+    const { kind, iconPath, badge, color } = getFileFormatInfo(item);
+
+    // Media and images: prioritize real thumbnail if available
+    if ((kind === "image" || kind === "video") && item.thumbnail) {
+      return { type: "thumb", src: item.thumbnail, badge, color };
+    }
+
+    // Documents, code, archives, text: prioritize format-specific icon
+    if (
+      kind === "pdf" ||
+      kind === "markdown" ||
+      kind === "code" ||
+      kind === "archive" ||
+      kind === "text"
+    ) {
+      return { type: "format", path: iconPath, badge, color };
+    }
+
+    // Other files: use shell icon if available, else format icon
+    if (item.icon) {
+      return { type: "shell", src: item.icon, badge, color };
+    }
+
+    return { type: "format", path: iconPath, badge, color };
+  }
+
+  if (item.thumbnail) {
+    return { type: "thumb", src: item.thumbnail };
+  }
+  if (item.icon) {
+    return { type: "shell", src: item.icon };
+  }
+  return {
+    type: "format",
+    path: CATEGORY_ICONS[item.category] ?? CATEGORY_ICONS.file,
+  };
+}
 
 const SUGGESTED_APP_NAMES = new Set([
   "Firefox",

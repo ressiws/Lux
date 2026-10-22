@@ -3,6 +3,7 @@ pub mod clipboard_filters;
 pub mod color;
 pub mod everything;
 pub mod features;
+pub mod preview;
 pub mod search;
 pub mod shortcuts;
 pub mod tray;

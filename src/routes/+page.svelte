@@ -7,6 +7,7 @@
     getCategoryPlaceholder,
     hasOnlyFallbackSections,
     splitHighlight,
+    getItemDisplayIcon,
   } from "$lib/mock-data";
   import {
     getFeaturesConfig,
@@ -1582,6 +1583,7 @@
               {@const itemIndex = flatItems.indexOf(item)}
               {@const isSelected = itemIndex === selectedIndex}
               {@const highlighted = splitHighlight(item.name, query)}
+              {@const disp = getItemDisplayIcon(item)}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div
                 class="tile row-item"
@@ -1594,33 +1596,12 @@
                 onmousemove={() => handleRowHover(itemIndex)}
                 onclick={() => handleRowClick(itemIndex)}
               >
-                {#if item.category === "app"}
-                  {#if item.icon}
-                    <img class="ico-img" src={item.icon} alt="" />
-                  {:else}
-                    <div class="ico g" style="background: var(--chip);">
-                      <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.7"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                      >
-                        <rect x="3" y="3" width="18" height="18" rx="4" />
-                        <path d="M3 9h18M9 21V9" />
-                      </svg>
-                    </div>
-                  {/if}
-                {:else if item.isImage && item.thumbnail}
-                  <img class="thumb" src={item.thumbnail} alt="" />
-                {:else if item.icon}
-                  <img class="ico-img" src={item.icon} alt="" />
+                {#if disp.type === "thumb" && disp.src}
+                  <img class="thumb" src={disp.src} alt="" />
+                {:else if disp.type === "shell" && disp.src}
+                  <img class="ico-img" src={disp.src} alt="" />
                 {:else}
-                  <div class="ico g">
+                  <div class="ico g" style={disp.color ? `color: ${disp.color};` : ""}>
                     <svg
                       width="20"
                       height="20"
@@ -1632,7 +1613,7 @@
                       stroke-linejoin="round"
                       aria-hidden="true"
                     >
-                      <path d={getCategoryIconPath(item)} />
+                      <path d={disp.path ?? getCategoryIconPath(item)} />
                     </svg>
                   </div>
                 {/if}
@@ -1690,6 +1671,7 @@
               </div>
             {:else}
               {@const highlighted = splitHighlight(item.name, query)}
+              {@const disp = getItemDisplayIcon(item)}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div
                 class="row row-item"
@@ -1702,35 +1684,14 @@
                 onmousemove={() => handleRowHover(itemIndex)}
                 onclick={() => handleRowClick(itemIndex)}
               >
-                {#if item.category === "app"}
-                  {#if item.icon}
-                    <img class="ico-img" src={item.icon} alt="" />
-                  {:else}
-                    <div class="ico g" style="background: var(--chip);">
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.7"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                      >
-                        <rect x="3" y="3" width="18" height="18" rx="4" />
-                        <path d="M3 9h18M9 21V9" />
-                      </svg>
-                    </div>
-                  {/if}
-                {:else if item.isImage && item.thumbnail}
-                  <img class="thumb" src={item.thumbnail} alt="" />
-                {:else if item.icon}
-                  <img class="ico-img" src={item.icon} alt="" />
+                {#if disp.type === "thumb" && disp.src}
+                  <img class="thumb" src={disp.src} alt="" />
+                {:else if disp.type === "shell" && disp.src}
+                  <img class="ico-img" src={disp.src} alt="" />
                 {:else if isGradientThumbnail(item) || isClipThumbnail(item)}
                   <div class="thumb" style:background={item.thumbnail}></div>
                 {:else}
-                  <div class="ico g">
+                  <div class="ico g" style={disp.color ? `color: ${disp.color};` : ""}>
                     <svg
                       width="15"
                       height="15"
@@ -1742,7 +1703,7 @@
                       stroke-linejoin="round"
                       aria-hidden="true"
                     >
-                      <path d={getCategoryIconPath(item)} />
+                      <path d={disp.path ?? getCategoryIconPath(item)} />
                     </svg>
                   </div>
                 {/if}

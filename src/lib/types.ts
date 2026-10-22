@@ -7,6 +7,19 @@ export type ItemCategory =
   | "snip"
   | "fb";
 
+export type FileFormatKind =
+  | "pdf"
+  | "markdown"
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  | "code"
+  | "archive"
+  | "document"
+  | "folder"
+  | "generic";
+
 export interface ItemAction {
   readonly label: string;
   readonly shortcut: string;
