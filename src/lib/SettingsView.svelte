@@ -915,6 +915,21 @@
 
         <div class="srow">
           <div>
+            <b>Show result preview</b>
+            <small class="desc">Display size, location, and type for the selected result</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.resultPreview}
+            aria-label="Show result preview"
+            onclick={() => setSetting("resultPreview", !settings.resultPreview)}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
             <b>File Previews (Quick Look)</b>
             <small class="desc">Instant file preview window triggered by Space</small>
           </div>

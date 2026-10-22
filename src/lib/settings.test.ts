@@ -52,6 +52,7 @@ console.log("Running Settings and Density unit tests...");
   assertEqual(settings.flowPrefixCompatibility, true, "default prefix compat");
   assertEqual(settings.flowPrefixes[0], "et", "default prefix list contains et");
   assertEqual(settings.rememberSearch, false, "remember search disabled by default");
+  assertEqual(settings.resultPreview, false, "result preview disabled by default");
 }
 
 // 2. Backward compatibility with legacy interfaceStyle "minimal"
@@ -218,12 +219,18 @@ console.log("Running Settings and Density unit tests...");
   assertEqual(loadLastSearch(), "", "saved search can be cleared explicitly");
 }
 
-// 13. Remember search setting round-trip
+// 13. Remember search and result preview setting round-trip
 {
   localStorage.clear();
-  const state: SettingsState = { ...DEFAULT_SETTINGS, rememberSearch: true };
+  const state: SettingsState = {
+    ...DEFAULT_SETTINGS,
+    rememberSearch: true,
+    resultPreview: true,
+  };
   saveSettings(state);
-  assertEqual(loadSettings().rememberSearch, true, "remember search persists");
+  const reloaded = loadSettings();
+  assertEqual(reloaded.rememberSearch, true, "remember search persists");
+  assertEqual(reloaded.resultPreview, true, "result preview persists");
 }
 
 console.log("Settings and Density unit tests passed successfully.");

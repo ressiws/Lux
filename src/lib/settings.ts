@@ -24,6 +24,7 @@ export interface SettingsState {
   caret: boolean;
   fileSearch: boolean;
   rememberSearch: boolean;
+  resultPreview: boolean;
   clipboardHistory: boolean;
   flowPrefixCompatibility: boolean;
   flowPrefixes: string[];
@@ -40,6 +41,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   caret: true,
   fileSearch: true,
   rememberSearch: false,
+  resultPreview: false,
   clipboardHistory: true,
   flowPrefixCompatibility: true,
   flowPrefixes: ["et"],

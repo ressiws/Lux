@@ -460,6 +460,32 @@ export function getItemDisplayIcon(item: LauncherItem): ItemDisplayIcon {
   };
 }
 
+export function getItemMetadata(
+  item: LauncherItem,
+): Array<[string, string]> {
+  if (item.category === "app") {
+    return [
+      ["Kind", "Application"],
+      ["Location", item.location || item.path || "—"],
+      ["Version", item.version || "—"],
+      ["Size", item.size || "—"],
+    ];
+  }
+  if (item.category === "file") {
+    const kind = item.isImage
+      ? "Image"
+      : item.rightLabel && item.rightLabel !== "File"
+        ? item.rightLabel
+        : "File";
+    return [
+      ["Kind", kind],
+      ["Location", item.location || item.path || "—"],
+      ["Size", item.size || "—"],
+    ];
+  }
+  return [];
+}
+
 const SUGGESTED_APP_NAMES = new Set([
   "Firefox",
   "LightCraft",

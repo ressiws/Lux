@@ -8,6 +8,7 @@
     hasOnlyFallbackSections,
     splitHighlight,
     getItemDisplayIcon,
+    getItemMetadata,
   } from "$lib/mock-data";
   import {
     getFeaturesConfig,
@@ -187,6 +188,14 @@
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
+  );
+  const showResultPreview = $derived(
+    Boolean(
+      settings.resultPreview &&
+        selectedItem &&
+        (selectedItem.category === "app" || selectedItem.category === "file") &&
+        (isBrowseMode || !isIdle),
+    ),
   );
   const showEmptyState = $derived(
     (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
@@ -1864,6 +1873,40 @@
         <div class="sentinel" bind:this={sentinelElement} aria-hidden="true"></div>
       {/if}
     </div>
+    {#if showResultPreview && selectedItem}
+      {@const previewIcon = getItemDisplayIcon(selectedItem)}
+      <aside class="pv" aria-label="Result preview">
+        {#if previewIcon.type === "thumb" && previewIcon.src}
+          <img class="pbig" src={previewIcon.src} alt="" />
+        {:else}
+          <div class="pico">
+            {#if previewIcon.type === "shell" && previewIcon.src}
+              <img class="ico-img" src={previewIcon.src} alt="" />
+            {:else}
+              <div class="ico g">
+                <svg
+                  width="30"
+                  height="30"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d={previewIcon.path ?? getCategoryIconPath(selectedItem)} />
+                </svg>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        <div class="pt">{selectedItem.name}</div>
+        {#each getItemMetadata(selectedItem) as [label, value] (label)}
+          <div class="pm"><span>{label}</span><span>{value}</span></div>
+        {/each}
+      </aside>
+    {/if}
   </div>
 
   <div class="foot" data-tauri-drag-region="deep">
@@ -2490,6 +2533,72 @@
     overflow-y: auto;
     padding: 6px 10px 10px;
     scrollbar-width: thin;
+  }
+
+  .pv {
+    width: 250px;
+    flex: none;
+    border-left: 1px solid var(--line);
+    padding: 16px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    box-sizing: border-box;
+  }
+
+  .pbig {
+    height: 140px;
+    width: 100%;
+    object-fit: cover;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .pico {
+    display: grid;
+    place-items: center;
+    height: 110px;
+    margin-bottom: 8px;
+  }
+
+  .pico .ico {
+    width: 68px;
+    height: 68px;
+    border-radius: 18px;
+  }
+
+  .pico .ico-img {
+    width: 68px;
+    height: 68px;
+    border-radius: 18px;
+  }
+
+  .pico .ico svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .pt {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 8px;
+    word-break: break-word;
+  }
+
+  .pm {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--mut);
+  }
+
+  .pm span:last-child {
+    color: var(--fg);
+    text-align: right;
+    word-break: break-all;
   }
 
   .sec {
