@@ -57,6 +57,7 @@
     SearchResponse,
     DefaultBrowserInfo,
   } from "$lib/types";
+  import { registerWindowDrag } from "$lib/windowDrag";
 
   function getWindowLabel(): string {
     try {
@@ -1197,9 +1198,11 @@
 
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("keydown", handleKeydown);
+    const unregisterDrag = registerWindowDrag();
 
     return () => {
       disposed = true;
+      unregisterDrag();
       clearTimeout(feedbackTimer);
       clearTimeout(searchDebounceTimer);
       clearTimeout(searchProgressTimer);
@@ -1764,7 +1767,7 @@
     </div>
   </div>
 
-  <div class="foot">
+  <div class="foot" data-tauri-drag-region>
     <div class="logo" aria-label="Lux">
       <svg viewBox="0 0 64 64" width="12" height="12" fill="currentColor">
         <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />

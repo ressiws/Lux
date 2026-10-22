@@ -18,6 +18,7 @@
     type SettingsState,
   } from "./settings";
   import { getColorLuminance } from "./color";
+  import { registerWindowDrag } from "./windowDrag";
 
   interface Props {
     onClose: () => void;
@@ -667,9 +668,11 @@
 
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("copy", handleCopy);
+    const unregisterDrag = registerWindowDrag();
 
     return () => {
       clearTimeout(feedbackTimer);
+      unregisterDrag();
       unlisten?.();
       unlistenSettings?.();
       window.removeEventListener("keydown", handleKeydown);
@@ -1111,7 +1114,7 @@
   </div>
 
   <!-- Footer -->
-  <div class="foot">
+  <div class="foot" data-tauri-drag-region>
     <button
       class="logo-btn"
       type="button"
