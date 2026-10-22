@@ -2,6 +2,9 @@
   import { onMount } from "svelte";
   import {
     clearClipboardHistory,
+    completeFirstRun,
+    isFirstRun,
+    onShowWelcome,
     copyClipboardEntry,
     deleteClipboardEntry,
     getClipboardFiltersConfig,
@@ -22,11 +25,14 @@
   } from "./tauri";
   import {
     applyThemeAndCaret,
+    isWelcomeCompleted,
     loadSettings,
     saveSettings,
+    setWelcomeCompleted,
     type SettingsCategory,
     type SettingsState,
   } from "./settings";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import type {
     ClipboardEntry,
     ClipboardFiltersConfig,
@@ -38,6 +44,78 @@
   } from "./types";
 
   let activeCategory = $state<SettingsCategory>("general");
+  let activeSubtab = $state<string>("preferences");
+
+  interface SubtabDef {
+    id: string;
+    label: string;
+  }
+
+  const SUBTABS: Record<SettingsCategory, SubtabDef[]> = {
+    welcome: [{ id: "guide", label: "Quick Start" }],
+    general: [
+      { id: "preferences", label: "Preferences" },
+      { id: "shortcuts", label: "Shortcuts" },
+    ],
+    appearance: [
+      { id: "theme", label: "Theme" },
+      { id: "layout", label: "Density & Layout" },
+    ],
+    search: [
+      { id: "index", label: "Overview & Index" },
+      { id: "prefixes", label: "Prefixes" },
+    ],
+    clipboard: [
+      { id: "general", label: "General" },
+      { id: "filters", label: "Privacy Filters" },
+      { id: "inspection", label: "Safe Inspection" },
+    ],
+    features: [{ id: "features", label: "Core Features" }],
+    help: [
+      { id: "shortcuts", label: "Keyboard Shortcuts" },
+      { id: "tips", label: "Tips & Tricks" },
+    ],
+    about: [
+      { id: "about", label: "About Lux" },
+      { id: "diagnostics", label: "Diagnostics" },
+    ],
+  };
+
+  const CATEGORIES: { id: SettingsCategory; label: string }[] = [
+    { id: "welcome", label: "Welcome" },
+    { id: "general", label: "General" },
+    { id: "appearance", label: "Appearance" },
+    { id: "search", label: "Search" },
+    { id: "clipboard", label: "Clipboard" },
+    { id: "features", label: "Features" },
+    { id: "help", label: "Help & Tips" },
+    { id: "about", label: "About" },
+  ];
+
+  let currentSubtabs = $derived(SUBTABS[activeCategory] || []);
+
+  function selectCategory(cat: SettingsCategory): void {
+    if (activeCategory === "welcome" && cat !== "welcome") {
+      setWelcomeCompleted(true);
+      void completeFirstRun();
+    }
+    activeCategory = cat;
+    const subs = SUBTABS[cat];
+    activeSubtab = subs && subs.length > 0 ? subs[0].id : "";
+  }
+
+  async function handleGetStarted(): Promise<void> {
+    setWelcomeCompleted(true);
+    await completeFirstRun();
+    await hideSettings();
+  }
+
+  async function handleExploreSettings(): Promise<void> {
+    setWelcomeCompleted(true);
+    await completeFirstRun();
+    selectCategory("general");
+  }
+
   let settings = $state<SettingsState>(loadSettings());
   let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
 
@@ -316,17 +394,45 @@
     }
   }
 
-  async function handleClearClipboard(): Promise<void> {
+  let isClearingClipboard = $state(false);
+  let showClearConfirmDialog = $state(false);
+
+  async function handleConfirmClearClipboard(): Promise<void> {
+    isClearingClipboard = true;
     try {
       await clearClipboardHistory();
       clipboardCount = 0;
     } catch {
       // Ignore outside Tauri
+    } finally {
+      isClearingClipboard = false;
+      showClearConfirmDialog = false;
     }
   }
 
   onMount(() => {
     applyThemeAndCaret(settings);
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
+
+    void isFirstRun().then((isFirst) => {
+      if (isFirst && !isWelcomeCompleted()) {
+        activeCategory = "welcome";
+        activeSubtab = "guide";
+      }
+    });
+
+    let unlistenWelcome: (() => void) | undefined;
+    void onShowWelcome(() => {
+      activeCategory = "welcome";
+      activeSubtab = "guide";
+    }).then((unlisten) => {
+      unlistenWelcome = unlisten;
+    });
     void loadFeatures();
     void loadShortcutsStatus();
     void loadFiltersConfig();
@@ -346,6 +452,10 @@
     let unlistenFeatures: (() => void) | undefined;
 
     void onOpenSettings(() => {
+      if (activeCategory === "welcome") {
+        activeCategory = "general";
+        activeSubtab = "preferences";
+      }
       settings = loadSettings();
       applyThemeAndCaret(settings);
       void loadFeatures();
@@ -390,6 +500,8 @@
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("contextmenu", handleContextMenu);
+      unlistenWelcome?.();
       clearTimeout(launcherSaveTimer);
       clearTimeout(clipboardSaveTimer);
       if (unlistenIndexing) {
@@ -405,7 +517,7 @@
   });
 </script>
 
-<div class="settings-win" role="dialog" aria-label="Lux Settings">
+<div class="settings-win" role="dialog" aria-label="Lux Main Menu">
   <div class="stb" data-tauri-drag-region>
     <div class="stb-title">
       <div class="logo">
@@ -413,87 +525,132 @@
           <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
         </svg>
       </div>
-      <span>Lux Settings</span>
+      <span>Lux Main Menu</span>
     </div>
     <button
       id="sx"
       type="button"
-      aria-label="Close settings"
+      aria-label="Close menu"
       onclick={handleClose}
     >✕</button>
   </div>
 
-  <div class="set-tabs" role="tablist" aria-label="Settings categories">
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "general"}
-      aria-selected={activeCategory === "general"}
-      onclick={() => (activeCategory = "general")}
-    >
-      General
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "appearance"}
-      aria-selected={activeCategory === "appearance"}
-      onclick={() => (activeCategory = "appearance")}
-    >
-      Appearance
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "search"}
-      aria-selected={activeCategory === "search"}
-      onclick={() => (activeCategory = "search")}
-    >
-      Search
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "clipboard"}
-      aria-selected={activeCategory === "clipboard"}
-      onclick={() => (activeCategory = "clipboard")}
-    >
-      Clipboard
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "features"}
-      aria-selected={activeCategory === "features"}
-      onclick={() => (activeCategory = "features")}
-    >
-      Features
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "help"}
-      aria-selected={activeCategory === "help"}
-      onclick={() => (activeCategory = "help")}
-    >
-      Help &amp; Shortcuts
-    </button>
-    <button
-      type="button"
-      role="tab"
-      class:active={activeCategory === "about"}
-      aria-selected={activeCategory === "about"}
-      onclick={() => (activeCategory = "about")}
-    >
-      About
-    </button>
-  </div>
+  <div class="main-layout">
+    <div class="sidebar" role="tablist" aria-label="Main menu categories">
+      {#each CATEGORIES as cat (cat.id)}
+        <button
+          type="button"
+          role="tab"
+          class="sidebar-item"
+          class:active={activeCategory === cat.id}
+          aria-selected={activeCategory === cat.id}
+          onclick={() => selectCategory(cat.id)}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            {#if cat.id === "welcome"}
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            {:else if cat.id === "general"}
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            {:else if cat.id === "appearance"}
+              <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/>
+            {:else if cat.id === "search"}
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            {:else if cat.id === "clipboard"}
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+            {:else if cat.id === "features"}
+              <rect x="1" y="5" width="22" height="14" rx="7" ry="7"/><circle cx="16" cy="12" r="3"/>
+            {:else if cat.id === "help"}
+              <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            {:else if cat.id === "about"}
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            {/if}
+          </svg>
+          <span>{cat.label}</span>
+        </button>
+      {/each}
+    </div>
 
-  <div class="set-body">
-    {#if activeCategory === "general"}
-      <div class="srow">
-        <div>
-          <b>Launch on Startup</b>
+    <div class="main-content">
+      {#if currentSubtabs.length > 1}
+        <div class="subtabs-bar" role="tablist" aria-label="Category subtabs">
+          {#each currentSubtabs as sub (sub.id)}
+            <button
+              type="button"
+              role="tab"
+              class="subtab-btn"
+              class:active={activeSubtab === sub.id}
+              aria-selected={activeSubtab === sub.id}
+              onclick={() => (activeSubtab = sub.id)}
+            >
+              {sub.label}
+            </button>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="content-scroll">
+    {#if activeCategory === "welcome"}
+        <div class="welcome-container">
+          <div class="welcome-hero">
+            <div class="welcome-logo-badge">
+              <svg viewBox="0 0 64 64" width="28" height="28" fill="currentColor">
+                <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
+              </svg>
+            </div>
+            <h2 class="welcome-title">Welcome to Lux</h2>
+            <p class="welcome-desc">
+              A blazingly fast, keyboard-first desktop launcher and workspace companion.
+            </p>
+          </div>
+
+          <div class="welcome-grid">
+            <div class="w-card">
+              <div class="w-card-header">
+                <span class="w-card-badge">Launcher</span>
+                <div class="w-shortcut"><kbd>Alt</kbd> + <kbd>Space</kbd></div>
+              </div>
+              <p>Find apps, search indexed files, calculate expressions, convert colors, and browse the web with zero delay.</p>
+            </div>
+
+            <div class="w-card">
+              <div class="w-card-header">
+                <span class="w-card-badge">Clipboard History</span>
+                <div class="w-shortcut"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd></div>
+              </div>
+              <p>Recall copied text, code snippets, colors, and images with automatic secret and credential privacy masking.</p>
+            </div>
+
+            <div class="w-card">
+              <div class="w-card-header">
+                <span class="w-card-badge">Quick Look Preview</span>
+                <div class="w-shortcut"><kbd>Space</kbd></div>
+              </div>
+              <p>Preview any selected document, PDF, markdown, code file, archive, or image directly without opening heavy apps.</p>
+            </div>
+
+            <div class="w-card">
+              <div class="w-card-header">
+                <span class="w-card-badge">Contextual Actions</span>
+                <div class="w-shortcut"><kbd>Ctrl</kbd> + <kbd>K</kbd> / <kbd>Right Click</kbd></div>
+              </div>
+              <p>Right-click any item or press Ctrl+K to reveal in File Explorer, copy paths, run as administrator, or execute actions.</p>
+            </div>
+          </div>
+
+          <div class="welcome-actions">
+            <button type="button" class="btn-subtle" onclick={handleExploreSettings}>
+              Configure Preferences
+            </button>
+            <button type="button" class="btn-primary" onclick={handleGetStarted}>
+              Get Started
+            </button>
+          </div>
+        </div>
+      {:else if activeCategory === "general"}
+      {#if activeSubtab === "preferences"}
+        <div class="srow">
+          <div>
+            <b>Launch on Startup</b>
           <small class="desc">Start Lux automatically when logging into Windows</small>
         </div>
         <button
@@ -506,9 +663,10 @@
         ></button>
       </div>
 
-      <div class="srow">
-        <div>
-          <b>Launcher Global Shortcut</b>
+      {:else if activeSubtab === "shortcuts"}
+        <div class="srow">
+          <div>
+            <b>Launcher Global Shortcut</b>
           <small class="desc">Show or hide the command launcher</small>
         </div>
         <div class="shortcut-group">
@@ -567,10 +725,12 @@
         </div>
         <span class="badge">Standard</span>
       </div>
+      {/if}
     {:else if activeCategory === "appearance"}
-      <div class="srow">
-        <div>
-          <b>Information Density</b>
+      {#if activeSubtab === "layout"}
+        <div class="srow">
+          <div>
+            <b>Information Density</b>
           <small class="desc">
             {#if settings.informationDensity === "minimal"}
               Minimal: Essential information only, hiding hints and secondary metadata
@@ -644,7 +804,8 @@
         </div>
       </div>
 
-      <div class="srow">
+      {:else if activeSubtab === "theme"}
+        <div class="srow">
         <div><b>Theme</b></div>
         <div class="seg" role="group" aria-label="Theme">
           <button
@@ -708,10 +869,12 @@
           onclick={() => setSetting("caret", !settings.caret)}
         ></button>
       </div>
+      {/if}
     {:else if activeCategory === "search"}
-      <div class="srow">
-        <div>
-          <b>File &amp; Folder Search</b>
+      {#if activeSubtab === "index"}
+        <div class="srow">
+          <div>
+            <b>File &amp; Folder Search</b>
           <small class="desc">Search user folders and all indexed drives</small>
         </div>
         <button
@@ -724,9 +887,47 @@
         ></button>
       </div>
 
-      <div class="srow">
-        <div>
-          <b>Flow Launcher Prefix Compatibility</b>
+        <div class="srow">
+          <div>
+            <b>File Previews (Quick Look)</b>
+            <small class="desc">Instant file preview window triggered by Space</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.preview}
+            aria-label="File previews"
+            onclick={() => setSetting("preview", !settings.preview)}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
+            <b>System Index</b>
+            <small class="desc">
+              {#if isIndexing}
+                Indexing applications and files…
+              {:else if indexStats.isIndexed}
+                {indexStats.totalApps} apps, {indexStats.totalFiles} files indexed
+              {:else}
+                Index ready
+              {/if}
+            </small>
+          </div>
+          <button
+            class="btn-sub"
+            type="button"
+            disabled={isIndexing}
+            onclick={triggerReindex}
+          >
+            {isIndexing ? "Indexing…" : "Re-index now"}
+          </button>
+        </div>
+      {:else if activeSubtab === "prefixes"}
+        <div class="srow">
+          <div>
+            <b>Flow Launcher Prefix Compatibility</b>
           <small class="desc">Ignore leading prefix tokens like "et" when searching</small>
         </div>
         <button
@@ -785,10 +986,12 @@
           </div>
         </div>
       {/if}
+      {/if}
     {:else if activeCategory === "clipboard"}
-      <div class="srow">
-        <div>
-          <b>Clipboard History</b>
+      {#if activeSubtab === "general"}
+        <div class="srow">
+          <div>
+            <b>Clipboard History</b>
           <small class="desc">Monitor, store and search recent clipboard entries</small>
         </div>
         <button
@@ -1156,28 +1359,16 @@
           <button
             class="btn-sub danger"
             type="button"
-            onclick={handleClearClipboard}
+            onclick={() => {
+              showClearConfirmDialog = true;
+            }}
           >
             Clear History
           </button>
         </div>
       {/if}
+      {/if}
     {:else if activeCategory === "features"}
-      <div class="srow">
-        <div>
-          <b>Preview Panel</b>
-          <small class="desc">Show details, metadata, and quick actions for the selected item</small>
-        </div>
-        <button
-          class="sw"
-          type="button"
-          role="switch"
-          aria-checked={settings.preview}
-          aria-label="Preview Panel"
-          onclick={() => setSetting("preview", !settings.preview)}
-        ></button>
-      </div>
-
       <div class="srow">
         <div>
           <b>Indexing Progress Bar</b>
@@ -1217,7 +1408,8 @@
       </div>
     {:else if activeCategory === "help"}
       <div class="help-section">
-        <h4 class="help-heading">Keyboard Shortcuts</h4>
+        {#if activeSubtab === "shortcuts"}
+          <h4 class="help-heading">Keyboard Shortcuts</h4>
         <div class="help-table">
           <div class="help-row">
             <span class="help-desc">Toggle Lux Launcher</span>
@@ -1248,8 +1440,8 @@
             <span class="help-keys"><kbd>Esc</kbd></span>
           </div>
         </div>
-
-        <h4 class="help-heading">Quick Answer Examples</h4>
+        {:else if activeSubtab === "tips"}
+          <h4 class="help-heading">Quick Answer Examples</h4>
         <p class="help-intro">Type these directly into the search bar for instant offline answers without pressing Enter:</p>
         <div class="help-grid">
           <div class="help-card">
@@ -1289,9 +1481,11 @@
             <code>generate password 24</code>
           </div>
         </div>
+        {/if}
       </div>
     {:else if activeCategory === "about"}
-      <div class="about-card">
+      {#if activeSubtab === "about"}
+        <div class="about-card">
         <div class="about-header">
           <div class="logo about-logo">
             <svg viewBox="0 0 64 64" width="24" height="24" fill="currentColor">
@@ -1301,7 +1495,7 @@
           <div>
             <div class="about-title-row">
               <span class="about-title">Lux</span>
-              <span class="about-ver">v0.1.0-beta.2</span>
+              <span class="about-ver">v0.1.0-beta.3</span>
             </div>
             <p class="about-desc">
               Fast, keyboard-first desktop launcher and productivity tool for Windows.
@@ -1327,9 +1521,55 @@
             <span class="spec-val">Open Source (MIT)</span>
           </div>
         </div>
-      </div>
+        </div>
+      {:else if activeSubtab === "diagnostics"}
+        <div class="about-card">
+          <h4 style="margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--fg);">System &amp; Engine Diagnostics</h4>
+          <div class="about-specs">
+            <div class="about-spec-row">
+              <span class="spec-label">Search Index State</span>
+              <span class="spec-val">{indexStats.isIndexed ? "Ready" : "Initializing"}</span>
+            </div>
+            <div class="about-spec-row">
+              <span class="spec-label">Indexed Applications</span>
+              <span class="spec-val">{indexStats.totalApps}</span>
+            </div>
+            <div class="about-spec-row">
+              <span class="spec-label">Indexed Files</span>
+              <span class="spec-val">{indexStats.totalFiles}</span>
+            </div>
+            <div class="about-spec-row">
+              <span class="spec-label">Clipboard Monitored</span>
+              <span class="spec-val">{featuresConfig.clipboardHistory ? "Active" : "Disabled"}</span>
+            </div>
+            <div class="about-spec-row">
+              <span class="spec-label">Privacy Filters Mode</span>
+              <span class="spec-val">{filtersConfig.mode}</span>
+            </div>
+            <div class="about-spec-row">
+              <span class="spec-label">Launcher Window Mode</span>
+              <span class="spec-val">{settings.layout}</span>
+            </div>
+          </div>
+        </div>
+      {/if}
     {/if}
+      </div>
+    </div>
   </div>
+
+  <ConfirmDialog
+    open={showClearConfirmDialog}
+    title="Clear Clipboard History?"
+    message="Are you sure you want to clear your local clipboard history? Pinned items will be preserved."
+    confirmLabel="Clear History"
+    isDanger={true}
+    isSubmitting={isClearingClipboard}
+    onConfirm={handleConfirmClearClipboard}
+    onCancel={() => {
+      showClearConfirmDialog = false;
+    }}
+  />
 </div>
 
 <style>
@@ -1406,70 +1646,267 @@
     transition: all 0.15s ease;
   }
 
+
+  .main-layout {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    width: 175px;
+    background: rgba(0, 0, 0, 0.08);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 8px;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+
+  :global([data-theme="light"]) .sidebar {
+    background: rgba(0, 0, 0, 0.03);
+  }
+
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    color: var(--mut);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+
+  .sidebar-item:hover {
+    color: var(--fg);
+    background: var(--chip);
+  }
+
+  .sidebar-item.active {
+    color: var(--fg);
+    background: var(--sel);
+    box-shadow: inset 0 0 0 1px var(--line);
+    font-weight: 600;
+  }
+
+  .sidebar-item svg {
+    flex-shrink: 0;
+    opacity: 0.8;
+  }
+
+  .sidebar-item.active svg {
+    opacity: 1;
+  }
+
+  .main-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  .subtabs-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--chip);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+
+  .subtab-btn {
+    border: none;
+    background: none;
+    color: var(--mut);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .subtab-btn:hover {
+    color: var(--fg);
+  }
+
+  .subtab-btn.active {
+    background: var(--bg);
+    color: var(--fg);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .content-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Welcome Screen */
+  .welcome-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 4px 16px;
+  }
+
+  .welcome-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+    padding: 10px 0 6px;
+  }
+
+  .welcome-logo-badge {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--fg);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+    margin-bottom: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .welcome-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--fg);
+    letter-spacing: -0.02em;
+  }
+
+  .welcome-desc {
+    margin: 0;
+    font-size: 13px;
+    color: var(--mut);
+    max-width: 420px;
+    line-height: 1.45;
+  }
+
+  .welcome-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .w-card {
+    background: var(--chip);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.15s ease;
+  }
+
+  .w-card:hover {
+    border-color: var(--mut);
+  }
+
+  .w-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .w-card-badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .w-shortcut kbd {
+    font-family: inherit;
+    font-size: 10.5px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 2px 5px;
+    color: var(--fg);
+    font-weight: 500;
+  }
+
+  .w-card p {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--mut);
+    line-height: 1.4;
+  }
+
+  .welcome-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .btn-subtle {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s ease;
+  }
+
+  .btn-subtle:hover {
+    background: var(--chip);
+  }
+
+  .btn-primary {
+    background: var(--fg);
+    color: var(--bg);
+    border: none;
+    padding: 7px 16px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.15s ease;
+  }
+
+  .btn-primary:hover {
+    opacity: 0.9;
+  }
+
   .stb button:hover {
     background: var(--sel);
     color: var(--fg);
   }
 
-  .set-tabs {
-    display: flex;
-    gap: 3px;
-    padding: 6px 10px;
-    background: var(--chip);
-    border-bottom: 1px solid var(--line);
-    flex-shrink: 0;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
 
-  .set-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .set-tabs button {
-    flex: 1 1 0%;
-    min-width: 0;
-    border: 0;
-    background: none;
-    color: var(--mut);
-    font:
-      500 12px Inter,
-      "Segoe UI",
-      system-ui,
-      sans-serif;
-    padding: 6px 6px;
-    border-radius: 6px;
-    cursor: pointer;
-    white-space: nowrap;
-    text-align: center;
-    text-overflow: ellipsis;
-    overflow: hidden;
-    transition: all 0.15s ease;
-  }
-
-  .set-tabs button:hover {
-    color: var(--fg);
-  }
-
-  .set-tabs button.active {
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-  }
-
-  .set-body {
-    flex: 1 1 0%;
-    min-height: 0;
-    max-height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 10px 16px;
-    scrollbar-width: thin;
-    width: 100%;
-    max-width: 100%;
-  }
 
   .srow {
     display: flex;
@@ -2311,14 +2748,9 @@
     padding: 0 12px;
   }
 
-  :global(:root[data-layout-density="compact"]) .set-tabs button {
-    padding: 4px 6px;
-    font-size: 11px;
-  }
 
-  :global(:root[data-layout-density="compact"]) .set-body {
-    padding: 8px 12px;
-  }
+
+
 
   :global(:root[data-layout-density="compact"]) .shortcut-input {
     width: 105px;
@@ -2337,14 +2769,9 @@
     padding: 0 16px;
   }
 
-  :global(:root[data-layout-density="comfortable"]) .set-tabs button {
-    padding: 7px 8px;
-    font-size: 12px;
-  }
 
-  :global(:root[data-layout-density="comfortable"]) .set-body {
-    padding: 14px 16px;
-  }
+
+
 
   :global(:root[data-layout-density="comfortable"]) .seg button {
     padding: 5px 9px;

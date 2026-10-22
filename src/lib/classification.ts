@@ -1,4 +1,4 @@
-import type { LauncherItem, SearchResultItem } from "./types";
+import type { FileFormatKind, LauncherItem, SearchResultItem } from "./types";
 import type { SearchFilter } from "./mock-data";
 
 export type AppSubcategory =
@@ -91,26 +91,123 @@ export interface SubcategoryItem {
 const appCache = new Map<string, AppSubcategory>();
 const fileCache = new Map<string, FileSubcategory>();
 
-const IMAGE_EXTS = new Set([
+export const IMAGE_EXTS = new Set([
   "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif", "avif", "heic",
 ]);
 
-const DOCUMENT_EXTS = new Set([
-  "pdf", "doc", "docx", "txt", "rtf", "odt", "xls", "xlsx", "csv", "ppt", "pptx",
-  "md", "markdown", "json", "xml", "yaml", "yml", "epub", "log",
+export const PDF_EXTS = new Set(["pdf"]);
+
+export const MARKDOWN_EXTS = new Set(["md", "markdown", "mdown", "mkd"]);
+
+export const TEXT_EXTS = new Set(["txt", "log", "rtf", "nfo", "ini", "cfg", "conf"]);
+
+export const CODE_EXTS = new Set([
+  "rs", "ts", "js", "jsx", "tsx", "py", "c", "cpp", "h", "hpp", "cs",
+  "go", "java", "html", "css", "scss", "json", "toml", "yaml", "yml",
+  "xml", "sql", "sh", "bat", "ps1", "cmd", "php", "rb", "swift", "kt",
+  "dart", "lua", "vue", "svelte",
 ]);
 
-const VIDEO_EXTS = new Set([
+export const ARCHIVE_EXTS = new Set([
+  "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz",
+]);
+
+export const DOCUMENT_EXTS = new Set([
+  "doc", "docx", "xls", "xlsx", "csv", "ppt", "pptx", "odt", "ods", "odp", "epub",
+]);
+
+export const VIDEO_EXTS = new Set([
   "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp",
 ]);
 
-const AUDIO_EXTS = new Set([
+export const AUDIO_EXTS = new Set([
   "mp3", "wav", "flac", "ogg", "m4a", "wma", "aac", "opus", "alac",
 ]);
 
-const ARCHIVE_EXTS = new Set([
-  "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso",
-]);
+export function detectFileFormat(itemOrPath: string | LauncherItem | SearchResultItem): FileFormatKind {
+  let path = "";
+  let isFolder = false;
+  let isImage = false;
+
+  if (typeof itemOrPath === "string") {
+    path = itemOrPath;
+  } else {
+    path = itemOrPath.path || itemOrPath.name;
+    isFolder = itemOrPath.rightLabel === "Folder" || itemOrPath.rightLabel === "DIR";
+    isImage = "isImage" in itemOrPath && Boolean(itemOrPath.isImage);
+  }
+
+  if (isFolder || path.endsWith("/") || path.endsWith("\\")) {
+    return "folder";
+  }
+
+  if (isImage) {
+    return "image";
+  }
+
+  const lastDot = path.lastIndexOf(".");
+  if (lastDot < 0) {
+    return "generic";
+  }
+  const ext = path.slice(lastDot + 1).toLowerCase();
+
+  if (PDF_EXTS.has(ext)) {
+    return "pdf";
+  }
+  if (MARKDOWN_EXTS.has(ext)) {
+    return "markdown";
+  }
+  if (TEXT_EXTS.has(ext)) {
+    return "text";
+  }
+  if (IMAGE_EXTS.has(ext)) {
+    return "image";
+  }
+  if (VIDEO_EXTS.has(ext)) {
+    return "video";
+  }
+  if (AUDIO_EXTS.has(ext)) {
+    return "audio";
+  }
+  if (CODE_EXTS.has(ext)) {
+    return "code";
+  }
+  if (ARCHIVE_EXTS.has(ext)) {
+    return "archive";
+  }
+  if (DOCUMENT_EXTS.has(ext)) {
+    return "document";
+  }
+
+  return "generic";
+}
+
+export function getFileFormatBadge(kind: FileFormatKind): string {
+  switch (kind) {
+    case "pdf":
+      return "PDF";
+    case "markdown":
+      return "MD";
+    case "text":
+      return "TXT";
+    case "code":
+      return "CODE";
+    case "archive":
+      return "ZIP";
+    case "image":
+      return "IMG";
+    case "video":
+      return "VID";
+    case "audio":
+      return "AUD";
+    case "document":
+      return "DOC";
+    case "folder":
+      return "DIR";
+    case "generic":
+      return "FILE";
+  }
+}
 
 /**
  * Deterministically classifies an application using local metadata
@@ -322,7 +419,12 @@ export function classifyFile(item: LauncherItem | SearchResultItem): FileSubcate
     return cached;
   }
 
-  if (item.rightLabel === "Folder") {
+  if (
+    item.rightLabel === "Folder" ||
+    item.rightLabel === "DIR" ||
+    ("fileFormat" in item && item.fileFormat === "folder") ||
+    detectFileFormat(item) === "folder"
+  ) {
     fileCache.set(cacheKey, "folders");
     return "folders";
   }
@@ -340,7 +442,13 @@ export function classifyFile(item: LauncherItem | SearchResultItem): FileSubcate
 
   if (IMAGE_EXTS.has(ext)) {
     result = "images";
-  } else if (DOCUMENT_EXTS.has(ext)) {
+  } else if (
+    PDF_EXTS.has(ext) ||
+    MARKDOWN_EXTS.has(ext) ||
+    TEXT_EXTS.has(ext) ||
+    CODE_EXTS.has(ext) ||
+    DOCUMENT_EXTS.has(ext)
+  ) {
     result = "documents";
   } else if (VIDEO_EXTS.has(ext)) {
     result = "videos";

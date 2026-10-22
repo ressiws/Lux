@@ -54,12 +54,14 @@ Built with Rust and Tauri 2, Lux combines native desktop integration with a fast
 
 ## Current Features
 
-- **Search Anything** — Find and launch installed applications, or search genuine local files and directories with real-time indexing. Browse dedicated categories (Apps, Files, Actions) with smooth subcategory filtering, progressive loading, and interactive back navigation.
+- **Search Anything** — Find and launch installed applications, or search genuine local files and directories using the background Everything search engine or native indexer. Browse dedicated categories (Apps, Files, Actions) with smooth subcategory filtering, progressive loading, and interactive back navigation.
+- **Quick Look Previews** — Select any file result in the launcher and press <kbd>Space</kbd> to open a dedicated Quick Look preview window with format-aware metadata, text truncation preview, PDF page detection, archive file listing, image previews, and format badges.
+- **Contextual Actions** — Press <kbd>Ctrl</kbd> + <kbd>K</kbd> or **Right-Click** any item in the launcher or clipboard history to inspect and trigger contextual actions, such as running applications as Administrator (<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd>), revealing items in File Explorer (<kbd>Ctrl</kbd> + <kbd>O</kbd>), copying paths, or custom actions.
+- **First-Run Welcome & Main Menu** — On first launch after installation, Lux displays an introductory welcome guide explaining how to open and use the launcher, clipboard, and previews. Left-clicking Lux's system tray icon opens the dedicated **Main Menu** organizing settings, privacy filters, keyboard shortcuts, index status, and diagnostics into clean side tabs and subtabs.
 - **Quick Answers** — Evaluate mathematical expressions (`(128 * 1.19) / 3`, `sqrt(144)`), compute financial VAT/taxes, split expenses, inspect worldwide time zones and differences, perform calendar day arithmetic, convert units (distinguishing decimal SI and binary IEC digital storage), and inspect color formats (#HEX, RGB, HSL) with visual swatches—all processed offline locally.
 - **Currency Conversion** — Convert between 160+ fiat currencies with smart local caching and offline fallback, without transmitting search queries or polling on keystrokes.
 - **Clipboard History** — Access your clipboard history in a dedicated window (<kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>). Search previous clips, filter by type (text, links, images, colors), and protect sensitive data with built-in filters for API keys, bearer tokens, credit cards, and custom regular expressions.
-- **Quick Actions** — Press <kbd>Ctrl</kbd> + <kbd>K</kbd> to inspect contextual secondary actions for any highlighted result, such as running applications as Administrator (<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd>), revealing items in File Explorer (<kbd>Ctrl</kbd> + <kbd>O</kbd>), or copying paths.
-- **Application Controls** — Run silently in the background with minimal idle resource usage. Summon the launcher via a customizable global shortcut (<kbd>Alt</kbd> + <kbd>Space</kbd> by default), dismiss it instantly with <kbd>Esc</kbd> or focus loss, and manage the application via the system tray.
+- **Application Controls & System Tray** — Run silently in the background with minimal idle resource usage. Summon the launcher via a customizable global shortcut (<kbd>Alt</kbd> + <kbd>Space</kbd> by default), dismiss it instantly with <kbd>Esc</kbd> or focus loss, and manage the application via the system tray.
 - **Customization & Display Densities** — Tailor the launcher to your preference with three information density modes (`Minimal` Spotlight-style, `Normal`, `Detailed`), three layout padding densities (`Compact`, `Normal`, `Comfortable`), `List` or `Grid` view modes, and `System`, `Light`, or `Dark` themes.
 - **Secure Password Generator** — Generate cryptographically random passwords locally on demand (`generate password 24`) that are copied directly to your clipboard without leaving traces or network requests.
 
@@ -161,6 +163,10 @@ pnpm tauri build
 ### Completed in Recent Releases
 - [x] Application discovery and launch integration with Administrator execution support
 - [x] Local file and folder indexing with progressive batch loading
+- [x] Background Everything search engine integration with native IPC and fallback
+- [x] macOS-style Quick Look preview window (<kbd>Space</kbd>) with format-aware icons and file inspection
+- [x] Contextual right-click Actions menu across launcher and clipboard history
+- [x] First-run welcome guide and dedicated multi-tab Main Menu
 - [x] Category browse modes (Apps, Files, Actions) with back navigation
 - [x] Offline Quick Answers (math, financial VAT/splits, timezones, date math, SI/IEC storage units, colors, passwords)
 - [x] Currency conversion with local 24-hour rate caching and offline fallback

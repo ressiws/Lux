@@ -18,6 +18,8 @@
     type SettingsState,
   } from "./settings";
   import { getColorLuminance } from "./color";
+  import { registerWindowDrag } from "./windowDrag";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   interface Props {
     onClose: () => void;
@@ -301,7 +303,7 @@
       label: "Clear All Pins",
       shortcut: "",
       danger: true,
-      action: () => clearAllPins(),
+      action: () => promptClearAllPins(),
     });
 
     // Clear all
@@ -309,7 +311,7 @@
       label: "Clear History",
       shortcut: "",
       danger: true,
-      action: () => clearAllHistory(),
+      action: () => promptClearAllHistory(),
     });
 
     return actions;
@@ -379,39 +381,68 @@
     }
   }
 
-  let isClearingPins = false;
-  async function clearAllPins(): Promise<void> {
-    if (isClearingPins) return;
+  let isConfirmSubmitting = $state(false);
+  let confirmDialogState = $state<{
+    open: boolean;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    action: () => Promise<void>;
+  }>({
+    open: false,
+    title: "",
+    message: "",
+    confirmLabel: "",
+    action: async () => {},
+  });
+
+  function promptClearAllPins(): void {
     const pinnedCount = entries.filter((e) => e.isPinned).length;
     if (pinnedCount === 0) {
       say("No pinned entries to clear");
       actionsOpen = false;
       return;
     }
-    if (window.confirm("Are you sure you want to clear all pinned entries?")) {
-      isClearingPins = true;
-      try {
-        await clearClipboardPins();
-        say("All pins cleared");
-        actionsOpen = false;
-        await loadHistory();
-      } catch (err) {
-        say(`Failed to clear pins: ${err}`);
-      } finally {
-        isClearingPins = false;
-      }
-    }
+    actionsOpen = false;
+    confirmDialogState = {
+      open: true,
+      title: "Clear All Pinned Entries?",
+      message: `Are you sure you want to remove all ${pinnedCount} pinned items from your clipboard history? This cannot be undone.`,
+      confirmLabel: "Clear Pins",
+      action: async () => {
+        try {
+          await clearClipboardPins();
+          say("All pins cleared");
+          await loadHistory();
+        } catch (err) {
+          say(`Failed to clear pins: ${err}`);
+        }
+      },
+    };
   }
 
-  async function clearAllHistory(): Promise<void> {
-    try {
-      await clearClipboardHistory();
-      say("History cleared");
+  function promptClearAllHistory(): void {
+    if (entries.length === 0) {
+      say("History is already empty");
       actionsOpen = false;
-      await loadHistory();
-    } catch (err) {
-      say(`Failed to clear: ${err}`);
+      return;
     }
+    actionsOpen = false;
+    confirmDialogState = {
+      open: true,
+      title: "Clear Clipboard History?",
+      message: "Are you sure you want to clear your clipboard history? Pinned items will be preserved.",
+      confirmLabel: "Clear History",
+      action: async () => {
+        try {
+          await clearClipboardHistory();
+          say("History cleared");
+          await loadHistory();
+        } catch (err) {
+          say(`Failed to clear history: ${err}`);
+        }
+      },
+    };
   }
 
   function pickFilter(kind: ClipboardKind | "all"): void {
@@ -442,7 +473,26 @@
     }
   }
 
+  function handleRowContextMenu(event: MouseEvent, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedIndex = index;
+    filterMenuOpen = false;
+    selectedActionIndex = 0;
+    actionsOpen = true;
+  }
+
   function handleKeydown(e: KeyboardEvent): void {
+    if (confirmDialogState.open) {
+      if (e.key === "Escape" && !isConfirmSubmitting) {
+        e.preventDefault();
+        e.stopPropagation();
+        confirmDialogState.open = false;
+        searchInput?.focus();
+      }
+      return;
+    }
+
     const k = e.key;
 
     // Filter menu shortcut: Ctrl + P (when actions popover is closed)
@@ -666,13 +716,22 @@
     });
 
     window.addEventListener("keydown", handleKeydown);
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
     window.addEventListener("copy", handleCopy);
+    const unregisterDrag = registerWindowDrag();
 
     return () => {
       clearTimeout(feedbackTimer);
+      unregisterDrag();
       unlisten?.();
       unlistenSettings?.();
       window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("contextmenu", handleContextMenu);
       window.removeEventListener("copy", handleCopy);
     };
   });
@@ -840,6 +899,7 @@
                 }
               }}
               onclick={() => void pasteItem(item)}
+              oncontextmenu={(e) => handleRowContextMenu(e, globalIndex)}
             >
               {#if item.kind === "color"}
                 <div class="sw">
@@ -1111,7 +1171,7 @@
   </div>
 
   <!-- Footer -->
-  <div class="foot">
+  <div class="foot" data-tauri-drag-region>
     <button
       class="logo-btn"
       type="button"
@@ -1190,6 +1250,29 @@
       {/each}
     </div>
   {/if}
+
+  <ConfirmDialog
+    open={confirmDialogState.open}
+    title={confirmDialogState.title}
+    message={confirmDialogState.message}
+    confirmLabel={confirmDialogState.confirmLabel}
+    isDanger={true}
+    isSubmitting={isConfirmSubmitting}
+    onConfirm={async () => {
+      isConfirmSubmitting = true;
+      try {
+        await confirmDialogState.action();
+      } finally {
+        isConfirmSubmitting = false;
+        confirmDialogState.open = false;
+        searchInput?.focus();
+      }
+    }}
+    onCancel={() => {
+      confirmDialogState.open = false;
+      searchInput?.focus();
+    }}
+  />
 </div>
 
 <style>

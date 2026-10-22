@@ -13,7 +13,7 @@ const MENU_ID_QUIT: &str = "quit";
 pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let open_item = MenuItem::with_id(app, MENU_ID_OPEN, "Open Launcher", true, None::<&str>)
         .map_err(|err| format!("Failed to create tray Open item: {err}"))?;
-    let settings_item = MenuItem::with_id(app, MENU_ID_SETTINGS, "Open Settings", true, None::<&str>)
+    let settings_item = MenuItem::with_id(app, MENU_ID_SETTINGS, "Open Main Menu", true, None::<&str>)
         .map_err(|err| format!("Failed to create tray Settings item: {err}"))?;
     let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, "Quit Lux", true, None::<&str>)
         .map_err(|err| format!("Failed to create tray Quit item: {err}"))?;
@@ -40,6 +40,13 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 if let Some(state) = app_handle.try_state::<LauncherState>() {
                     state.mark_quitting();
                 }
+                if let Some(state) = app_handle.try_state::<crate::search::SearchState>() {
+                    if let Ok(mut g) = state.everything.lock() {
+                        if let Some(mut mgr) = g.take() {
+                            mgr.stop();
+                        }
+                    }
+                }
                 shortcuts::unregister_all_shortcuts(app_handle);
                 app_handle.exit(0);
             }
@@ -51,7 +58,7 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 button_state: MouseButtonState::Up,
                 ..
             } = event
-                && let Err(err) = window::toggle_launcher_window(tray.app_handle())
+                && let Err(err) = window::toggle_settings_window(tray.app_handle())
             {
                 eprintln!("Warning: failed to toggle launcher from tray click: {err}");
             }

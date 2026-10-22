@@ -530,6 +530,61 @@ export function runSearchIntegrationTests(): number {
     assertEqual(stD.dismissed, true, "Launcher dismissed in Search Anything root");
   });
 
+  // 25. Test Files and Folders Browse & Subcategory filtering
+  check(() => {
+    const mockBrowseResponse: SearchResponse = {
+      apps: [],
+      files: [sampleFolder, sampleDoc, sampleImage],
+    };
+
+    // A: Browse mode - All subcategories
+    const allSections = buildSections("", undefined, {
+      filter: "files",
+      subcategory: "all",
+      browseResponse: mockBrowseResponse,
+      enableFileSearch: true,
+    });
+    assertEqual(allSections.length, 1, "Browse mode files section present");
+    assertEqual(allSections[0].items.length, 3, "Browse mode contains folder, doc, image");
+
+    // B: Browse mode - Folders subcategory only
+    const folderSections = buildSections("", undefined, {
+      filter: "files",
+      subcategory: "folders",
+      browseResponse: mockBrowseResponse,
+      enableFileSearch: true,
+    });
+    assertEqual(folderSections.length, 1, "Folders subcategory section present");
+    assertEqual(folderSections[0].items.length, 1, "Only folder item returned");
+    assertEqual(folderSections[0].items[0].name, "Projects", "Folder name matches");
+    assertEqual(folderSections[0].items[0].rightLabel, "Folder", "Right label is Folder");
+
+    // C: Browse mode - Images subcategory only
+    const imageSections = buildSections("", undefined, {
+      filter: "files",
+      subcategory: "images",
+      browseResponse: mockBrowseResponse,
+      enableFileSearch: true,
+    });
+    assertEqual(imageSections.length, 1, "Images subcategory section present");
+    assertEqual(imageSections[0].items.length, 1, "Only image item returned");
+    assertEqual(imageSections[0].items[0].name, "portfolio.png", "Image name matches");
+
+    // D: Query mode - Folders subcategory filtering
+    const searchFolderResp: SearchResponse = {
+      apps: [],
+      files: [sampleFolder, sampleDoc],
+    };
+    const queryFolderSections = buildSections("pro", searchFolderResp, {
+      filter: "files",
+      subcategory: "folders",
+      enableFileSearch: true,
+    });
+    assertEqual(queryFolderSections.length, 1, "Query folder section present");
+    assertEqual(queryFolderSections[0].items.length, 1, "Only folder item matching query");
+    assertEqual(queryFolderSections[0].items[0].name, "Projects", "Projects folder matches");
+  });
+
   return passed;
 }
 

@@ -12,7 +12,7 @@ const MAX_DIR_DEPTH: usize = 6;
 const MAX_INDEXED_FILES: usize = 50000;
 const MAX_RESULTS_PER_CATEGORY: usize = 50;
 
-const IMAGE_EXTENSIONS: &[&str] = &[
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico", "tiff", "tif", "avif",
 ];
 
@@ -78,6 +78,8 @@ const EXCLUDED_APP_PATTERNS: &[&str] = &[
 pub struct SearchResponse {
     pub apps: Vec<SearchResultItem>,
     pub files: Vec<SearchResultItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -219,6 +221,7 @@ pub struct SearchIndex {
 pub struct SearchState {
     pub index: Arc<RwLock<SearchIndex>>,
     pub is_indexing: Arc<AtomicBool>,
+    pub everything: Arc<Mutex<Option<crate::everything::EverythingManager>>>,
 }
 
 impl SearchState {
@@ -226,11 +229,21 @@ impl SearchState {
         Self {
             index: Arc::new(RwLock::new(SearchIndex::default())),
             is_indexing: Arc::new(AtomicBool::new(false)),
+            everything: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn is_indexing(&self) -> bool {
         self.is_indexing.load(Ordering::Relaxed)
+    }
+
+    pub fn is_everything_active(&self) -> bool {
+        if let Ok(guard) = self.everything.lock() {
+            if let Some(ref mgr) = *guard {
+                return mgr.is_available();
+            }
+        }
+        false
     }
 }
 
@@ -1625,15 +1638,25 @@ fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
     })
 }
 
-pub fn build_full_search_index() -> SearchIndex {
-    let home_dir = get_user_home_dir();
+pub fn build_apps_search_index() -> SearchIndex {
+    let _home_dir = get_user_home_dir();
 
     #[cfg(target_os = "windows")]
     let apps = scan_windows_start_menu_apps();
 
     #[cfg(not(target_os = "windows"))]
-    let apps = scan_linux_desktop_apps(home_dir.as_deref());
+    let apps = scan_linux_desktop_apps(_home_dir.as_deref());
 
+    SearchIndex {
+        apps,
+        files: Vec::new(),
+        is_indexed: true,
+    }
+}
+
+pub fn build_full_search_index() -> SearchIndex {
+    let mut index = build_apps_search_index();
+    let home_dir = get_user_home_dir();
     let mut files = Vec::new();
     let mut seen_paths = HashSet::new();
     let search_roots = get_user_search_directories(&home_dir);
@@ -1656,11 +1679,8 @@ pub fn build_full_search_index() -> SearchIndex {
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
-    SearchIndex {
-        apps,
-        files,
-        is_indexed: true,
-    }
+    index.files = files;
+    index
 }
 
 fn resolve_app_metadata(
@@ -1752,26 +1772,13 @@ fn build_file_search_result(file: &IndexedFile) -> SearchResultItem {
     }
 }
 
-pub fn search_index(
-    index: &SearchIndex,
-    raw_query: &str,
-) -> (Vec<SearchResultItem>, Vec<SearchResultItem>) {
-    let trimmed = raw_query.trim();
-
+pub fn search_apps(apps: &[IndexedApp], query: &str) -> Vec<SearchResultItem> {
+    let trimmed = query.trim();
     if trimmed.is_empty() {
-        let app_suggestions = index
-            .apps
-            .iter()
-            .take(3)
-            .map(build_app_search_result)
-            .collect();
-
-        return (app_suggestions, Vec::new());
+        return apps.iter().take(3).map(build_app_search_result).collect();
     }
 
-    // Search applications
-    let mut matched_apps: Vec<(u32, &IndexedApp)> = index
-        .apps
+    let mut matched_apps: Vec<(u32, &IndexedApp)> = apps
         .iter()
         .filter_map(|app| {
             let direct_score = score_match(&app.name, &app.keywords, trimmed);
@@ -1791,11 +1798,24 @@ pub fn search_index(
             .then_with(|| a.1.name.cmp(&b.1.name))
     });
 
-    let app_results: Vec<SearchResultItem> = matched_apps
+    matched_apps
         .into_iter()
         .take(MAX_RESULTS_PER_CATEGORY)
         .map(|(_, app)| build_app_search_result(app))
-        .collect();
+        .collect()
+}
+
+pub fn search_index(
+    index: &SearchIndex,
+    raw_query: &str,
+) -> (Vec<SearchResultItem>, Vec<SearchResultItem>) {
+    let trimmed = raw_query.trim();
+
+    if trimmed.is_empty() {
+        return (search_apps(&index.apps, raw_query), Vec::new());
+    }
+
+    let app_results = search_apps(&index.apps, raw_query);
 
     // Search files and folders
     let mut matched_files: Vec<(u32, &IndexedFile)> = index
@@ -2235,9 +2255,51 @@ pub fn start_background_indexing<R: Runtime>(app_handle: AppHandle<R>) {
             },
         );
 
-        let index = build_full_search_index();
+        let is_everything = app_handle
+            .try_state::<SearchState>()
+            .map(|s| s.is_everything_active())
+            .unwrap_or(false);
+        let index = if is_everything {
+            let mut apps_index = build_apps_search_index();
+            if let Some(state) = app_handle.try_state::<SearchState>() {
+                if let Ok(guard) = state.index.read() {
+                    if !guard.files.is_empty() {
+                        apps_index.files = guard.files.clone();
+                    }
+                }
+            }
+            if apps_index.files.is_empty() {
+                let home_dir = get_user_home_dir();
+                let search_roots = get_user_search_directories(&home_dir);
+                let mut seen_paths = HashSet::new();
+                for root in search_roots {
+                    walk_directory_files(
+                        &root,
+                        0,
+                        MAX_DIR_DEPTH,
+                        &mut seen_paths,
+                        &mut apps_index.files,
+                    );
+                }
+            }
+            apps_index
+        } else {
+            build_full_search_index()
+        };
         let total_apps = index.apps.len();
-        let total_files = index.files.len();
+        let total_files = if is_everything {
+            if let Some(state) = app_handle.try_state::<SearchState>() {
+                if let Ok(guard) = state.everything.lock() {
+                    guard.as_ref().and_then(|mgr| mgr.get_total_database_items()).unwrap_or(0) as usize
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            index.files.len()
+        };
 
         if let Some(state) = app_handle.try_state::<SearchState>()
             && let Ok(mut lock) = state.index.write()
@@ -2542,17 +2604,30 @@ mod tests {
                 size: None,
                 version: None,
             }],
-            files: vec![IndexedFile {
-                name: "test.pdf".to_string(),
-                subtitle: "Documents".to_string(),
-                path: PathBuf::from("C:\\test.pdf"),
-                location: "C:\\".to_string(),
-                is_image: false,
-                extension: "pdf".to_string(),
-                right_label: "PDF".to_string(),
-                size: None,
-                icon: None,
-            }],
+            files: vec![
+                IndexedFile {
+                    name: "Projects".to_string(),
+                    subtitle: "D:\\".to_string(),
+                    path: PathBuf::from("D:\\Projects"),
+                    location: "D:\\Projects".to_string(),
+                    is_image: false,
+                    extension: String::new(),
+                    right_label: "Folder".to_string(),
+                    size: None,
+                    icon: None,
+                },
+                IndexedFile {
+                    name: "test.pdf".to_string(),
+                    subtitle: "Documents".to_string(),
+                    path: PathBuf::from("C:\\test.pdf"),
+                    location: "C:\\".to_string(),
+                    is_image: false,
+                    extension: "pdf".to_string(),
+                    right_label: "PDF".to_string(),
+                    size: None,
+                    icon: None,
+                },
+            ],
             is_indexed: true,
         };
 
@@ -2563,8 +2638,11 @@ mod tests {
 
         let (apps, files) = browse_index(&index, "files");
         assert_eq!(apps.len(), 0);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].name, "test.pdf");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].name, "Projects");
+        assert_eq!(files[0].right_label, "Folder");
+        assert_eq!(files[1].name, "test.pdf");
+        assert_eq!(files[1].right_label, "PDF");
 
         let (apps, files) = browse_index(&index, "actions");
         assert_eq!(apps.len(), 0);

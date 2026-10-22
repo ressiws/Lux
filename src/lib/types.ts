@@ -7,6 +7,19 @@ export type ItemCategory =
   | "snip"
   | "fb";
 
+export type FileFormatKind =
+  | "pdf"
+  | "markdown"
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  | "code"
+  | "archive"
+  | "document"
+  | "folder"
+  | "generic";
+
 export interface ItemAction {
   readonly label: string;
   readonly shortcut: string;
@@ -60,6 +73,7 @@ export interface SearchResultItem {
 export interface SearchResponse {
   readonly apps: readonly SearchResultItem[];
   readonly files: readonly SearchResultItem[];
+  readonly backend?: "everything" | "native" | string;
 }
 
 export interface LauncherSection {
@@ -96,6 +110,7 @@ export interface IndexStats {
   readonly totalFiles: number;
   readonly isIndexed: boolean;
   readonly isIndexing?: boolean;
+  readonly backend?: "everything" | "native" | string;
 }
 
 export type ClipboardKind = "text" | "link" | "image" | "file" | "color";
@@ -161,4 +176,29 @@ export interface FeaturesConfig {
 export interface DefaultBrowserInfo {
   readonly name: string;
   readonly icon: string | null;
+}
+
+export interface ArchiveEntry {
+  readonly name: string;
+  readonly isDir: boolean;
+  readonly sizeBytes: number;
+  readonly sizeFormatted: string;
+}
+
+export interface FilePreviewInfo {
+  readonly path: string;
+  readonly filename: string;
+  readonly fileSizeBytes: number;
+  readonly fileSizeFormatted: string;
+  readonly formatKind: FileFormatKind;
+  readonly mimeOrTypeLabel: string;
+  readonly modifiedTimestamp: number | null;
+  readonly modifiedFormatted: string | null;
+  readonly textContent: string | null;
+  readonly isTruncated: boolean;
+  readonly lineCount: number | null;
+  readonly dimensions: [number, number] | null;
+  readonly pageCount?: number | null;
+  readonly archiveEntries: readonly ArchiveEntry[] | null;
+  readonly error: string | null;
 }

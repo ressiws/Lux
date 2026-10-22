@@ -1,13 +1,16 @@
 pub mod clipboard;
 pub mod clipboard_filters;
 pub mod color;
+pub mod everything;
 pub mod features;
+pub mod preview;
 pub mod search;
 pub mod shortcuts;
 pub mod tray;
 pub mod window;
 
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, State, WindowEvent};
 use window::{LauncherState, LauncherStatus};
 
 use clipboard::{
@@ -19,6 +22,31 @@ use clipboard_filters::{
 };
 use features::{get_features_config, set_feature_enabled};
 use shortcuts::{get_shortcuts_status, update_shortcuts};
+
+#[tauri::command]
+fn show_preview(app: AppHandle, path: String) -> Result<(), String> {
+    window::show_preview_window(&app, &path)
+}
+
+#[tauri::command]
+fn hide_preview(app: AppHandle) -> Result<(), String> {
+    window::hide_preview_window(&app)
+}
+
+#[tauri::command]
+fn toggle_preview(app: AppHandle, path: String) -> Result<(), String> {
+    window::toggle_preview_window(&app, &path)
+}
+
+#[tauri::command]
+fn get_file_preview(path: String) -> Result<preview::FilePreviewInfo, String> {
+    preview::get_file_preview_info(&path)
+}
+
+#[tauri::command]
+fn is_preview_visible(app: AppHandle) -> bool {
+    window::is_preview_window_visible(&app)
+}
 
 #[tauri::command]
 fn hide_launcher(app: AppHandle) -> Result<(), String> {
@@ -35,11 +63,57 @@ fn search_launcher(
     query: String,
     state: State<'_, search::SearchState>,
 ) -> search::SearchResponse {
-    let (apps, files) = match state.index.read() {
+    let trimmed = query.trim();
+
+    let apps = match state.index.read() {
+        Ok(guard) => search::search_apps(&guard.apps, trimmed),
+        Err(poisoned) => search::search_apps(&poisoned.into_inner().apps, trimmed),
+    };
+
+    if trimmed.is_empty() {
+        return search::SearchResponse {
+            apps,
+            files: Vec::new(),
+            backend: None,
+        };
+    }
+
+    let everything_result = if state.is_everything_active() {
+        let guard = state.everything.lock().ok();
+        guard.and_then(|g| {
+            g.as_ref().map(|mgr| mgr.search(trimmed, 50))
+        })
+    } else {
+        None
+    };
+
+    if let Some(res) = everything_result {
+        match res {
+            Ok(mut files) => {
+                let app_paths: std::collections::HashSet<String> =
+                    apps.iter().map(|a| a.path.clone()).collect();
+                files.retain(|f| !app_paths.contains(&f.path));
+                return search::SearchResponse {
+                    apps,
+                    files,
+                    backend: Some("everything".to_string()),
+                };
+            }
+            Err(err) => {
+                eprintln!("[Search Backend] Everything search failed for query '{trimmed}': {err}. Falling back to native search index.");
+            }
+        }
+    }
+
+    let (_, files) = match state.index.read() {
         Ok(guard) => search::search_index(&guard, &query),
         Err(poisoned) => search::search_index(&poisoned.into_inner(), &query),
     };
-    search::SearchResponse { apps, files }
+    search::SearchResponse {
+        apps,
+        files,
+        backend: Some("native".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -47,11 +121,32 @@ fn browse_launcher(
     category: String,
     state: State<'_, search::SearchState>,
 ) -> search::SearchResponse {
+    let trimmed_cat = category.trim();
+
+    if trimmed_cat == "files" && state.is_everything_active() {
+        let guard = state.everything.lock().ok();
+        let everything_files = guard.and_then(|g| {
+            g.as_ref().map(|mgr| mgr.search("", 500))
+        });
+
+        if let Some(Ok(files)) = everything_files {
+            return search::SearchResponse {
+                apps: Vec::new(),
+                files,
+                backend: Some("everything".to_string()),
+            };
+        }
+    }
+
     let (apps, files) = match state.index.read() {
         Ok(guard) => search::browse_index(&guard, &category),
         Err(poisoned) => search::browse_index(&poisoned.into_inner(), &category),
     };
-    search::SearchResponse { apps, files }
+    search::SearchResponse {
+        apps,
+        files,
+        backend: Some("native".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -119,16 +214,30 @@ struct IndexStats {
     total_files: usize,
     is_indexed: bool,
     is_indexing: bool,
+    backend: &'static str,
 }
 
 #[tauri::command]
 fn get_index_stats(state: State<'_, search::SearchState>) -> IndexStats {
     let guard = state.index.read().unwrap_or_else(|p| p.into_inner());
+    let (total_files, backend) = if state.is_everything_active() {
+        let count = {
+            let everything_guard = state.everything.lock().ok();
+            everything_guard
+                .and_then(|g| g.as_ref().and_then(|mgr| mgr.get_total_database_items()))
+                .unwrap_or(guard.files.len() as u32) as usize
+        };
+        (count, "everything")
+    } else {
+        (guard.files.len(), "native")
+    };
+
     IndexStats {
         total_apps: guard.apps.len(),
-        total_files: guard.files.len(),
+        total_files,
         is_indexed: guard.is_indexed,
         is_indexing: state.is_indexing(),
+        backend,
     }
 }
 
@@ -152,6 +261,30 @@ fn hide_settings(app: AppHandle) -> Result<(), String> {
     window::hide_settings_window(&app)
 }
 
+fn get_first_run_marker_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.path().app_local_data_dir().ok().map(|p| p.join(".first_run_completed"))
+}
+
+#[tauri::command]
+fn is_first_run(app: AppHandle) -> bool {
+    if let Some(path) = get_first_run_marker_path(&app) {
+        !path.exists()
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+fn complete_first_run(app: AppHandle) -> Result<(), String> {
+    if let Some(path) = get_first_run_marker_path(&app) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, b"1").map_err(|e| format!("Failed to mark first run completed: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn notify_frontend_ready(
     app: AppHandle,
@@ -162,7 +295,11 @@ fn notify_frontend_ready(
         state.set_idle_height(h);
     }
     state.mark_frontend_ready();
-    if state.should_show_on_ready() {
+    if state.should_show_welcome_on_ready() {
+        state.set_show_welcome_on_ready(false);
+        window::show_settings_window(&app)?;
+        let _ = app.emit("lux://show-welcome", ());
+    } else if state.should_show_on_ready() {
         state.set_show_on_ready(false);
         window::show_launcher_window(&app)?;
     }
@@ -235,7 +372,14 @@ pub fn run() {
             set_feature_enabled,
             get_image_thumbnail,
             clear_clipboard_pins,
-            get_default_browser
+            get_default_browser,
+            show_preview,
+            hide_preview,
+            toggle_preview,
+            get_file_preview,
+            is_preview_visible,
+            is_first_run,
+            complete_first_run
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -295,6 +439,28 @@ pub fn run() {
             app.manage(clipboard_state);
 
             let search_state = search::SearchState::new();
+
+            // Initialize managed Everything search engine
+            let app_local_data = handle
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let resource_dir = handle.path().resource_dir().ok();
+
+            match everything::EverythingManager::new(resource_dir.as_deref(), &app_local_data) {
+                Ok(mut mgr) => {
+                    if let Err(err) = mgr.start_or_connect() {
+                        eprintln!("Warning: Failed to start Everything engine: {err}");
+                    }
+                    if let Ok(mut g) = search_state.everything.lock() {
+                        *g = Some(mgr);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Warning: Failed to initialize Everything manager: {err}");
+                }
+            }
+
             let index_path = search::get_search_index_path(handle);
             let home_dir = search::get_user_home_dir();
             let current_fingerprint = search::compute_discovery_fingerprint(&home_dir);
@@ -321,7 +487,17 @@ pub fn run() {
                 search::start_background_indexing(handle.clone());
             }
 
-            if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
+            let first_run = if let Some(path) = get_first_run_marker_path(handle) {
+                !path.exists()
+            } else {
+                false
+            };
+
+            if first_run {
+                if let Some(state) = handle.try_state::<LauncherState>() {
+                    state.set_show_welcome_on_ready(true);
+                }
+            } else if (should_show_on_startup() || (!shortcut_config.launcher.registered && !tray_ok))
                 && let Some(state) = handle.try_state::<LauncherState>()
             {
                 if state.is_frontend_ready() {
@@ -355,6 +531,11 @@ pub fn run() {
                             window::SETTINGS_WINDOW_LABEL => {
                                 if let Err(err) = window::hide_settings_window(win.app_handle()) {
                                     eprintln!("Warning: failed to hide settings on close request: {err}");
+                                }
+                            }
+                            window::PREVIEW_WINDOW_LABEL => {
+                                if let Err(err) = window::hide_preview_window(win.app_handle()) {
+                                    eprintln!("Warning: failed to hide preview on close request: {err}");
                                 }
                             }
                             _ => {}
@@ -391,6 +572,13 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             shortcuts::unregister_all_shortcuts(app_handle);
+            if let Some(state) = app_handle.try_state::<search::SearchState>() {
+                if let Ok(mut g) = state.everything.lock() {
+                    if let Some(mut mgr) = g.take() {
+                        mgr.stop();
+                    }
+                }
+            }
         }
     });
 }
