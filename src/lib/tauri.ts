@@ -6,6 +6,10 @@ const EVENT_LAUNCHER_SHOWN = "lux://launcher-shown";
 const EVENT_LAUNCHER_HIDDEN = "lux://launcher-hidden";
 const EVENT_INDEXING_STATUS = "lux://indexing-status";
 
+export async function showLauncher(): Promise<void> {
+  await invoke("show_launcher");
+}
+
 export async function hideLauncher(): Promise<void> {
   await invoke("hide_launcher");
 }

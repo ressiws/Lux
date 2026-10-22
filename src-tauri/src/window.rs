@@ -412,6 +412,34 @@ mod win32_backdrop {
             flags: u32,
         ) -> i32;
         fn GetCursorPos(lp_point: *mut POINT) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
+        fn GetWindowThreadProcessId(hwnd: *mut c_void, lpdw_process_id: *mut u32) -> u32;
+        fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
+        fn IsChild(hwnd_parent: *mut c_void, hwnd: *mut c_void) -> i32;
+        fn GetAncestor(hwnd: *mut c_void, ga_flags: u32) -> *mut c_void;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThreadId() -> u32;
+    }
+
+    const GA_ROOT: u32 = 2;
+
+    pub fn is_window_foreground(hwnd: *mut c_void) -> bool {
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.is_null() {
+                return false;
+            }
+            if fg == hwnd {
+                return true;
+            }
+            if IsChild(hwnd, fg) != 0 {
+                return true;
+            }
+            GetAncestor(fg, GA_ROOT) == hwnd
+        }
     }
 
     pub fn get_global_cursor_pos() -> Option<(i32, i32)> {
@@ -454,8 +482,23 @@ mod win32_backdrop {
 
     pub fn activate_foreground(hwnd: *mut c_void) {
         unsafe {
-            let _ = BringWindowToTop(hwnd);
-            let _ = SetForegroundWindow(hwnd);
+            let fg = GetForegroundWindow();
+            if fg != hwnd {
+                let fg_thread = GetWindowThreadProcessId(fg, std::ptr::null_mut());
+                let cur_thread = GetCurrentThreadId();
+                if fg_thread != 0 && fg_thread != cur_thread {
+                    let _ = AttachThreadInput(cur_thread, fg_thread, 1);
+                    let _ = BringWindowToTop(hwnd);
+                    let _ = SetForegroundWindow(hwnd);
+                    let _ = AttachThreadInput(cur_thread, fg_thread, 0);
+                } else {
+                    let _ = BringWindowToTop(hwnd);
+                    let _ = SetForegroundWindow(hwnd);
+                }
+            } else {
+                let _ = BringWindowToTop(hwnd);
+                let _ = SetForegroundWindow(hwnd);
+            }
         }
     }
 
@@ -866,6 +909,9 @@ pub fn position_window_centered<R: Runtime>(
                 window_physical_size.width as i32,
                 window_physical_size.height as i32,
             );
+            let target_logical = tauri::LogicalSize::new(width, height);
+            let _ = window.set_size(target_logical);
+            let _ = window.set_position(target_pos);
             IS_PROGRAMMATIC_MOVING.store(false, Ordering::SeqCst);
             return;
         }
@@ -923,17 +969,13 @@ pub fn show_launcher_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         eprintln!("Warning: failed to unminimize launcher window: {err}");
     }
 
-    #[cfg(target_os = "windows")]
-    if let Ok(hwnd) = window.hwnd() {
-        win32_backdrop::configure_window_frame(hwnd.0);
-    }
-
     window
         .show()
         .map_err(|err| format!("Failed to show launcher window: {err}"))?;
 
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
         win32_backdrop::activate_foreground(hwnd.0);
     }
 
@@ -1000,6 +1042,17 @@ pub fn handle_window_focus_change<R: Runtime>(app: &AppHandle<R>, focused: bool)
         return;
     }
 
+    #[cfg(target_os = "windows")]
+    if !focused {
+        if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+            if let Ok(hwnd) = win.hwnd() {
+                if win32_backdrop::is_window_foreground(hwnd.0) {
+                    return;
+                }
+            }
+        }
+    }
+
     if let Some(state) = app.try_state::<LauncherState>() {
         state.record_focused(focused);
     }
@@ -1062,17 +1115,13 @@ pub fn show_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         position_window_centered(&window, SETTINGS_WIDTH, SETTINGS_HEIGHT);
     }
 
-    #[cfg(target_os = "windows")]
-    if let Ok(hwnd) = window.hwnd() {
-        win32_backdrop::configure_window_frame(hwnd.0);
-    }
-
     window
         .show()
         .map_err(|err| format!("Failed to show settings window: {err}"))?;
 
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
         win32_backdrop::activate_foreground(hwnd.0);
     }
 
@@ -1117,17 +1166,13 @@ pub fn show_preview_window<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result
         position_window_centered(&window, PREVIEW_WIDTH, PREVIEW_HEIGHT);
     }
 
-    #[cfg(target_os = "windows")]
-    if let Ok(hwnd) = window.hwnd() {
-        win32_backdrop::configure_window_frame(hwnd.0);
-    }
-
     window
         .show()
         .map_err(|err| format!("Failed to show preview window: {err}"))?;
 
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
+        win32_backdrop::configure_window_frame(hwnd.0);
         win32_backdrop::activate_foreground(hwnd.0);
     }
 
@@ -1183,6 +1228,17 @@ pub fn handle_settings_focus_change<R: Runtime>(app: &AppHandle<R>, focused: boo
 
     if !is_visible {
         return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if !focused {
+        if let Some(win) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
+            if let Ok(hwnd) = win.hwnd() {
+                if win32_backdrop::is_window_foreground(hwnd.0) {
+                    return;
+                }
+            }
+        }
     }
 
     if let Some(state) = app.try_state::<LauncherState>() {

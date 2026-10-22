@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    showLauncher,
     clearClipboardHistory,
     completeFirstRun,
     isFirstRun,
@@ -108,6 +109,7 @@
     setWelcomeCompleted(true);
     await completeFirstRun();
     await hideSettings();
+    await showLauncher();
   }
 
   async function handleExploreSettings(): Promise<void> {

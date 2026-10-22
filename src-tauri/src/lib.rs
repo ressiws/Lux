@@ -49,6 +49,11 @@ fn is_preview_visible(app: AppHandle) -> bool {
 }
 
 #[tauri::command]
+fn show_launcher(app: AppHandle) -> Result<(), String> {
+    window::show_launcher_window_explicit(&app)
+}
+
+#[tauri::command]
 fn hide_launcher(app: AppHandle) -> Result<(), String> {
     window::hide_launcher_window(&app)
 }
@@ -341,6 +346,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            show_launcher,
             hide_launcher,
             get_launcher_status,
             search_launcher,

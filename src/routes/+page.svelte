@@ -198,6 +198,7 @@
   const shouldExpand = $derived(!isIdle);
   let observer: IntersectionObserver | undefined;
   $effect(() => {
+    if (windowLabel !== "main") return;
     if (sentinelElement && visibleCount < flatItems.length) {
       observer?.disconnect();
       if (typeof IntersectionObserver !== "undefined") {
@@ -232,6 +233,7 @@
   }
 
   $effect(() => {
+    if (windowLabel !== "main") return;
     const _q = effectiveQuery;
     const _f = activeFilter;
     const _s = activeSubcategory;
@@ -248,6 +250,7 @@
   let lastSyncedHeight: number | undefined;
 
   async function syncWindowHeight(expanded: boolean): Promise<void> {
+    if (windowLabel !== "main") return;
     if (appMode === "clipboard") return;
     const targetHeight = expanded ? 500 : currentIdleHeight;
     if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
@@ -281,6 +284,7 @@
 
 
   $effect(() => {
+    if (windowLabel !== "main") return;
     if (appMode !== "launcher") return;
     const expand = shouldExpand;
     if (!expand && windowExpanded) {
@@ -1121,6 +1125,9 @@
 
   onMount(() => {
     applyThemeAndCaret(settings);
+    if (windowLabel !== "main") {
+      return;
+    }
     focusSearchInput();
     void performSearch("");
     const idleH = getIdleLauncherHeight(
