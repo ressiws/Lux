@@ -26,6 +26,7 @@
   } from "./tauri";
   import {
     applyThemeAndCaret,
+    clearLastSearch,
     isWelcomeCompleted,
     loadSettings,
     saveSettings,
@@ -306,6 +307,14 @@
     settings[key] = value;
     saveSettings(settings);
     applyThemeAndCaret(settings);
+  }
+
+  function toggleRememberSearch(): void {
+    const enabled = !settings.rememberSearch;
+    if (!enabled) {
+      clearLastSearch();
+    }
+    setSetting("rememberSearch", enabled);
   }
 
   async function handleClose(): Promise<void> {
@@ -888,6 +897,21 @@
           onclick={() => setSetting("fileSearch", !settings.fileSearch)}
         ></button>
       </div>
+
+        <div class="srow">
+          <div>
+            <b>Remember last search</b>
+            <small class="desc">Restore the most recent query when the launcher reopens</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.rememberSearch}
+            aria-label="Remember last search"
+            onclick={toggleRememberSearch}
+          ></button>
+        </div>
 
         <div class="srow">
           <div>

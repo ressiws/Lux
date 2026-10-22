@@ -42,8 +42,10 @@
   import {
     applyThemeAndCaret,
     getIdleLauncherHeight,
+    loadLastSearch,
     loadSettings,
     onSettingsChanged,
+    saveLastSearch,
     saveSettings,
     type SettingsState,
   } from "$lib/settings";
@@ -426,17 +428,27 @@
     focusSearchInput();
   }
 
-  function resetLauncherState(shouldFocus: boolean): void {
+  function getRestoredQuery(): string {
+    return settings.rememberSearch ? loadLastSearch() : "";
+  }
+
+  function resetLauncherState(
+    shouldFocus: boolean,
+    restoredQuery = "",
+  ): void {
     activeFilter = "all";
     activeSubcategory = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
-    query = "";
+    query = restoredQuery;
     selectedIndex = 0;
     opSeq++;
     isSearching = false;
     searchBarVisible = false;
     searchResponse = undefined;
+    if (restoredQuery.trim().length > 0) {
+      void performSearch(effectiveQuery);
+    }
     clearTimeout(feedbackTimer);
     clearTimeout(collapseTimer);
     clearTimeout(searchDebounceTimer);
@@ -723,6 +735,9 @@
   }
 
   function handleQueryInput(): void {
+    if (settings.rememberSearch) {
+      saveLastSearch(query);
+    }
     hasNavigatedList = false;
     selectedIndex = 0;
     selectedActionIndex = 0;
@@ -1128,8 +1143,9 @@
     if (windowLabel !== "main") {
       return;
     }
+    query = getRestoredQuery();
     focusSearchInput();
-    void performSearch("");
+    void performSearch(effectiveQuery);
     const idleH = getIdleLauncherHeight(
       settings.informationDensity,
       settings.layoutDensity,
@@ -1261,7 +1277,7 @@
 
     void onLauncherShown(() => {
       if (appMode === "launcher") {
-        resetLauncherState(true);
+        resetLauncherState(true, getRestoredQuery());
       }
     }).then((unlisten) => {
       if (disposed) {

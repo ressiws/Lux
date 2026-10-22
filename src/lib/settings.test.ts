@@ -3,8 +3,12 @@ import {
   loadSettings,
   saveSettings,
   applyThemeAndCaret,
+  clearLastSearch,
   getIdleLauncherHeight,
+  loadLastSearch,
+  saveLastSearch,
   SETTINGS_STORAGE_KEY,
+  LAST_SEARCH_STORAGE_KEY,
   isWelcomeCompleted,
   setWelcomeCompleted,
   WELCOME_COMPLETED_KEY,
@@ -47,6 +51,7 @@ console.log("Running Settings and Density unit tests...");
   assertEqual(settings.layoutDensity, "normal", "default layout density");
   assertEqual(settings.flowPrefixCompatibility, true, "default prefix compat");
   assertEqual(settings.flowPrefixes[0], "et", "default prefix list contains et");
+  assertEqual(settings.rememberSearch, false, "remember search disabled by default");
 }
 
 // 2. Backward compatibility with legacy interfaceStyle "minimal"
@@ -191,6 +196,34 @@ console.log("Running Settings and Density unit tests...");
 {
   const cat: SettingsCategory = "welcome";
   assertEqual(cat, "welcome", "welcome is a valid SettingsCategory");
+}
+
+// 12. Last search persistence
+{
+  localStorage.clear();
+  assertEqual(loadLastSearch(), "", "no saved search initially");
+  saveLastSearch("google");
+  assertEqual(loadLastSearch(), "google", "last search is restored");
+  assertEqual(
+    localStorage.getItem(LAST_SEARCH_STORAGE_KEY),
+    "google",
+    "last search uses dedicated storage key",
+  );
+  saveLastSearch("lux launcher");
+  assertEqual(loadLastSearch(), "lux launcher", "only the latest search is retained");
+  saveLastSearch("   ");
+  assertEqual(loadLastSearch(), "", "blank search clears the saved value");
+  saveLastSearch("settings");
+  clearLastSearch();
+  assertEqual(loadLastSearch(), "", "saved search can be cleared explicitly");
+}
+
+// 13. Remember search setting round-trip
+{
+  localStorage.clear();
+  const state: SettingsState = { ...DEFAULT_SETTINGS, rememberSearch: true };
+  saveSettings(state);
+  assertEqual(loadSettings().rememberSearch, true, "remember search persists");
 }
 
 console.log("Settings and Density unit tests passed successfully.");
