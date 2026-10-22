@@ -42,6 +42,22 @@
         "minimizable": false,
         "center": true,
         "shadow": false
+      },
+      {
+        "label": "preview",
+        "title": "Lux Preview",
+        "width": 780,
+        "height": 540,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": false,
+        "center": true,
+        "shadow": false
       }
     ],
     "security": {

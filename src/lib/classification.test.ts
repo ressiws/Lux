@@ -8,7 +8,7 @@ import {
   getFileFormatBadge,
 } from "./classification";
 import type { LauncherItem } from "./types";
-import { MOCK_ITEMS, MOCK_COMMANDS, getItemDisplayIcon } from "./mock-data";
+import { MOCK_ITEMS, MOCK_COMMANDS, getItemDisplayIcon, mapBackendFile } from "./mock-data";
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -289,6 +289,28 @@ export function runClassificationTests(): number {
     };
     const thumbIcon = getItemDisplayIcon(imageWithThumb);
     assertEqual(thumbIcon.type, "thumb", "Image with thumbnail uses thumb type");
+  });
+
+  // 7. Quick Look action mapping on backend file items
+  check(() => {
+    const fileItem = mapBackendFile({
+      id: "doc-1",
+      category: "file",
+      name: "document.pdf",
+      subtitle: "C:/docs",
+      path: "C:/docs/document.pdf",
+      location: "C:/docs",
+      icon: null,
+      thumbnail: null,
+      color: null,
+      rightLabel: "PDF",
+      isImage: false,
+      size: null,
+      version: null,
+    });
+    const qlAction = fileItem.actions.find((a) => a.label === "Quick Look");
+    assertEqual(Boolean(qlAction), true, "Quick Look action present in file actions");
+    assertEqual(qlAction?.shortcut, "Space", "Quick Look shortcut is Space");
   });
 
   return passed;
