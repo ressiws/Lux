@@ -8,6 +8,7 @@
     hasOnlyFallbackSections,
     splitHighlight,
     getItemDisplayIcon,
+    getItemMetadata,
   } from "$lib/mock-data";
   import {
     getFeaturesConfig,
@@ -42,8 +43,10 @@
   import {
     applyThemeAndCaret,
     getIdleLauncherHeight,
+    loadLastSearch,
     loadSettings,
     onSettingsChanged,
+    saveLastSearch,
     saveSettings,
     type SettingsState,
   } from "$lib/settings";
@@ -53,7 +56,17 @@
     type SubcategoryItem,
   } from "$lib/classification";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { resolvePrefix } from "$lib/prefix";
+  import { resolvePrefix } from "$lib/prefix";
+
+  import { findInlineCompletion } from "$lib/autocomplete";
+
+  import {
+    getFrequentItems,
+    loadUsageEntries,
+    recordItemUsage,
+    type FrequentMode,
+    type ItemUsage,
+  } from "$lib/usage";
   import type {
     FeaturesConfig,
     IndexStats,
@@ -105,7 +118,12 @@
   let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let isSearching = $state(false);
   let isPreviewOpen = $state(false);
-  let hasNavigatedList = $state(false);
+  let hasNavigatedList = $state(false);
+
+  let usageEntries = $state<ItemUsage[]>(loadUsageEntries());
+
+  let isQueryFocused = $state(false);
+
   let searchBarVisible = $state(false);
   let activeFilter = $state<SearchFilter>("all");
   let activeSubcategory = $state<string>("all");
@@ -157,10 +175,32 @@
       defaultBrowser,
     }),
   );
-  const flatItems = $derived(sections.flatMap((section) => section.items));
+  const flatResultItems = $derived(
+    sections.flatMap((section) => section.items),
+  );
+
+  const frequentMode = $derived<FrequentMode | undefined>(
+    activeFilter === "all"
+      ? "all"
+      : activeFilter === "apps"
+        ? "apps"
+        : activeFilter === "files" && activeSubcategory === "folders"
+          ? "folders"
+          : undefined,
+  );
+
+  const frequentItems = $derived(
+    frequentMode ? getFrequentItems(usageEntries, frequentMode, 4) : [],
+  );
+
+  const flatItems = $derived([...frequentItems, ...flatResultItems]);
+
+  const inlineCompletion = $derived(
+    isIdle ? undefined : findInlineCompletion(effectiveQuery, flatResultItems),
+  );
 
   const visibleSections = $derived.by<LauncherSection[]>(() => {
-    if (flatItems.length <= visibleCount) {
+    if (flatResultItems.length <= visibleCount) {
       return sections;
     }
     let remaining = visibleCount;
@@ -181,13 +221,21 @@
     return sliced;
   });
   const showViewSelector = $derived(
-    (isBrowseMode || !isIdle) && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+    (isBrowseMode || !isIdle) && flatResultItems.length > 0 && !hasOnlyFallbackSections(sections),
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
   );
+  const showResultPreview = $derived(
+    Boolean(
+      settings.resultPreview &&
+        selectedItem &&
+        (selectedItem.category === "app" || selectedItem.category === "file") &&
+        (isBrowseMode || !isIdle),
+    ),
+  );
   const showEmptyState = $derived(
-    (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
+    (flatResultItems.length === 0 || hasOnlyFallbackSections(sections)) &&
       (effectiveQuery.trim().length > 0 || isBrowseMode),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
@@ -198,15 +246,16 @@
   const shouldExpand = $derived(!isIdle);
   let observer: IntersectionObserver | undefined;
   $effect(() => {
-    if (sentinelElement && visibleCount < flatItems.length) {
+    if (windowLabel !== "main") return;
+    if (sentinelElement && visibleCount < flatResultItems.length) {
       observer?.disconnect();
       if (typeof IntersectionObserver !== "undefined") {
         observer = new IntersectionObserver(
           (entries) => {
             if (entries[0]?.isIntersecting) {
-              if (visibleCount < flatItems.length) {
+              if (visibleCount < flatResultItems.length) {
                 visibleCount = Math.min(
-                  flatItems.length,
+                  flatResultItems.length,
                   visibleCount + getBatchSize(activeFilter),
                 );
               }
@@ -221,17 +270,18 @@
   });
 
   function handleListScroll(): void {
-    if (!listContainer || visibleCount >= flatItems.length) return;
+    if (!listContainer || visibleCount >= flatResultItems.length) return;
     const { scrollTop, scrollHeight, clientHeight } = listContainer;
     if (scrollHeight - scrollTop - clientHeight < 200) {
       visibleCount = Math.min(
-        flatItems.length,
+        flatResultItems.length,
         visibleCount + getBatchSize(activeFilter),
       );
     }
   }
 
   $effect(() => {
+    if (windowLabel !== "main") return;
     const _q = effectiveQuery;
     const _f = activeFilter;
     const _s = activeSubcategory;
@@ -248,6 +298,7 @@
   let lastSyncedHeight: number | undefined;
 
   async function syncWindowHeight(expanded: boolean): Promise<void> {
+    if (windowLabel !== "main") return;
     if (appMode === "clipboard") return;
     const targetHeight = expanded ? 500 : currentIdleHeight;
     if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
@@ -281,6 +332,7 @@
 
 
   $effect(() => {
+    if (windowLabel !== "main") return;
     if (appMode !== "launcher") return;
     const expand = shouldExpand;
     if (!expand && windowExpanded) {
@@ -341,10 +393,14 @@
     });
   }
 
+  function getInitialSelectedIndex(): number {
+    return effectiveQuery.trim().length > 0 ? frequentItems.length : 0;
+  }
+
   function setQuery(val: string): void {
     query = val;
     activeSubcategory = "all";
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
@@ -385,7 +441,7 @@
     activeSubcategory = "all";
     browseResponse = undefined;
     visibleCount = getBatchSize("all");
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     focusSearchInput();
     if (query.trim().length > 0) {
@@ -396,7 +452,7 @@
   function selectSubcategory(subcatId: string): void {
     activeSubcategory = subcatId;
     visibleCount = getBatchSize(activeFilter);
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     focusSearchInput();
   }
@@ -410,7 +466,8 @@
       activeFilter = filter;
       void loadBrowseData(filter);
     }
-    selectedIndex = 0;
+
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     focusSearchInput();
@@ -422,17 +479,27 @@
     focusSearchInput();
   }
 
-  function resetLauncherState(shouldFocus: boolean): void {
+  function getRestoredQuery(): string {
+    return settings.rememberSearch ? loadLastSearch() : "";
+  }
+
+  function resetLauncherState(
+    shouldFocus: boolean,
+    restoredQuery = "",
+  ): void {
     activeFilter = "all";
     activeSubcategory = "all";
     actionsOpen = false;
     selectedActionIndex = 0;
-    query = "";
-    selectedIndex = 0;
+    query = restoredQuery;
+    selectedIndex = getInitialSelectedIndex();
     opSeq++;
     isSearching = false;
     searchBarVisible = false;
     searchResponse = undefined;
+    if (restoredQuery.trim().length > 0) {
+      void performSearch(effectiveQuery);
+    }
     clearTimeout(feedbackTimer);
     clearTimeout(collapseTimer);
     clearTimeout(searchDebounceTimer);
@@ -567,6 +634,7 @@
       isLaunching = true;
       try {
         await openTarget(item.path);
+        usageEntries = recordItemUsage(item);
         await dismissLauncher();
       } catch (err) {
         say(`Failed to open: ${err}`);
@@ -684,6 +752,7 @@
         isLaunching = true;
         try {
           await openTargetAsAdmin(item.path);
+          usageEntries = recordItemUsage(item);
           await dismissLauncher();
         } catch (err) {
           say(`Failed to run as admin: ${err}`);
@@ -718,9 +787,36 @@
     }
   }
 
+  async function acceptInlineCompletion(): Promise<void> {
+    const suggestion = inlineCompletion;
+    if (!suggestion) {
+      return;
+    }
+
+    const nextQuery = `${query}${suggestion.completion}`;
+    query = nextQuery;
+    hasNavigatedList = false;
+    selectedIndex = getInitialSelectedIndex();
+    selectedActionIndex = 0;
+    actionsOpen = false;
+
+    clearTimeout(searchDebounceTimer);
+    if (settings.rememberSearch) {
+      saveLastSearch(query);
+    }
+
+    void performSearch(effectiveQuery);
+    focusSearchInput();
+    await tick();
+    searchInput?.setSelectionRange(nextQuery.length, nextQuery.length);
+  }
+
   function handleQueryInput(): void {
+    if (settings.rememberSearch) {
+      saveLastSearch(query);
+    }
     hasNavigatedList = false;
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
@@ -896,6 +992,29 @@
     }
 
     if (
+      (event.key === "Tab" || event.key === "ArrowRight") &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      inlineCompletion &&
+      !hasNavigatedList &&
+      document.activeElement === searchInput
+    ) {
+      const input = searchInput;
+      if (
+        input &&
+        input.selectionStart === input.value.length &&
+        input.selectionEnd === input.value.length
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        await acceptInlineCompletion();
+        return;
+      }
+    }
+
+    if (
       (event.ctrlKey || event.metaKey) &&
       event.shiftKey &&
       event.key === "Enter" &&
@@ -907,6 +1026,7 @@
       isLaunching = true;
       try {
         await openTargetAsAdmin(selectedItem.path);
+        usageEntries = recordItemUsage(selectedItem);
         await dismissLauncher();
       } catch (err) {
         say(`Failed to run as admin: ${err}`);
@@ -1121,8 +1241,14 @@
 
   onMount(() => {
     applyThemeAndCaret(settings);
+    if (windowLabel !== "main") {
+      return;
+    }
+    query = getRestoredQuery();
+    selectedIndex = getInitialSelectedIndex();
+
     focusSearchInput();
-    void performSearch("");
+    void performSearch(effectiveQuery);
     const idleH = getIdleLauncherHeight(
       settings.informationDensity,
       settings.layoutDensity,
@@ -1254,7 +1380,8 @@
 
     void onLauncherShown(() => {
       if (appMode === "launcher") {
-        resetLauncherState(true);
+        usageEntries = loadUsageEntries();
+        resetLauncherState(true, getRestoredQuery());
       }
     }).then((unlisten) => {
       if (disposed) {
@@ -1343,7 +1470,7 @@
   role="dialog"
   aria-label="Lux command palette"
 >
-  <div class="bar" id="bar" data-tauri-drag-region>
+  <div class="bar" id="bar" data-tauri-drag-region="deep">
     {#if activeFilter !== "all"}
       <button
         type="button"
@@ -1452,16 +1579,25 @@
         {prefixResolution.prefix}
       </span>
     {/if}
-    <input
-      id="q"
-      bind:this={searchInput}
-      bind:value={query}
-      oninput={handleQueryInput}
-      autocomplete="off"
-      spellcheck="false"
-      placeholder={getCategoryPlaceholder(activeFilter)}
-      aria-label="Search"
-    />
+    <div class="query-field">
+      {#if inlineCompletion && isQueryFocused && !actionsOpen}
+        <span class="query-ghost" aria-hidden="true">
+          <span class="query-typed">{query}</span>{inlineCompletion.completion}<span class="query-hint"> — Open</span>
+        </span>
+      {/if}
+      <input
+        id="q"
+        bind:this={searchInput}
+        bind:value={query}
+        oninput={handleQueryInput}
+        onfocus={() => (isQueryFocused = true)}
+        onblur={() => (isQueryFocused = false)}
+        autocomplete="off"
+        spellcheck="false"
+        placeholder={getCategoryPlaceholder(activeFilter)}
+        aria-label="Search"
+      />
+    </div>
     <div class="spin" aria-hidden="true"></div>
 
     {#if showViewSelector}
@@ -1635,6 +1771,50 @@
 
   <div class="body">
     <div id="list" role="listbox" aria-label="Results" bind:this={listContainer} onscroll={handleListScroll}>
+      {#if frequentItems.length > 0}
+        <div class="sec">Frequently used</div>
+        <div class="grid">
+          {#each frequentItems as item, itemIdx (item.category + ":" + (item.path || item.name))}
+            {@const disp = getItemDisplayIcon(item)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              class="tile row-item"
+              class:on={itemIdx === selectedIndex}
+              data-i={itemIdx}
+              role="option"
+              tabindex="-1"
+              aria-selected={itemIdx === selectedIndex}
+              onmousedown={preventFocusLossOnMouseDown}
+              onmousemove={() => handleRowHover(itemIdx)}
+              onclick={() => handleRowClick(itemIdx)}
+              oncontextmenu={(e) => handleRowContextMenu(e, itemIdx)}
+            >
+              {#if disp.type === "thumb" && disp.src}
+                <img class="thumb" src={disp.src} alt="" />
+              {:else if disp.type === "shell" && disp.src}
+                <img class="ico-img" src={disp.src} alt="" />
+              {:else}
+                <div class="ico g" style={disp.color ? `color: ${disp.color};` : ""}>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d={disp.path ?? getCategoryIconPath(item)} />
+                  </svg>
+                </div>
+              {/if}
+              <span class="t">{item.name}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if showEmptyState}
         <div class="empty">
           <svg
@@ -1837,13 +2017,47 @@
           {/each}
         {/if}
       {/each}
-      {#if visibleCount < flatItems.length}
+      {#if visibleCount < flatResultItems.length}
         <div class="sentinel" bind:this={sentinelElement} aria-hidden="true"></div>
       {/if}
     </div>
+    {#if showResultPreview && selectedItem}
+      {@const previewIcon = getItemDisplayIcon(selectedItem)}
+      <aside class="pv" aria-label="Result preview">
+        {#if previewIcon.type === "thumb" && previewIcon.src}
+          <img class="pbig" src={previewIcon.src} alt="" />
+        {:else}
+          <div class="pico">
+            {#if previewIcon.type === "shell" && previewIcon.src}
+              <img class="ico-img" src={previewIcon.src} alt="" />
+            {:else}
+              <div class="ico g">
+                <svg
+                  width="30"
+                  height="30"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d={previewIcon.path ?? getCategoryIconPath(selectedItem)} />
+                </svg>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        <div class="pt">{selectedItem.name}</div>
+        {#each getItemMetadata(selectedItem) as [label, value] (label)}
+          <div class="pm"><span>{label}</span><span>{value}</span></div>
+        {/each}
+      </aside>
+    {/if}
   </div>
 
-  <div class="foot" data-tauri-drag-region>
+  <div class="foot" data-tauri-drag-region="deep">
     <div class="logo" aria-label="Lux">
       <svg viewBox="0 0 64 64" width="12" height="12" fill="currentColor">
         <path d="M 10 8 H 22 V 40 L 46 16 H 58 L 34 40 H 58 V 52 H 10 Z" />
@@ -2175,9 +2389,48 @@
     height: 22px;
   }
 
+  .query-field {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+  }
+
+  .query-ghost {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    padding: 1px 2px;
+    color: var(--dim);
+    font:
+      400 22px Inter,
+      "Segoe UI",
+      system-ui,
+      sans-serif;
+    letter-spacing: -0.01em;
+    white-space: pre;
+    pointer-events: none;
+  }
+
+  .query-ghost .query-typed {
+    color: transparent;
+  }
+
+  .query-hint {
+    color: var(--dim);
+    opacity: 0.68;
+  }
+
   #q {
     flex: 1;
     min-width: 0;
+    position: relative;
+    z-index: 1;
     background: none;
     border: 0;
     outline: 0;
@@ -2467,6 +2720,72 @@
     overflow-y: auto;
     padding: 6px 10px 10px;
     scrollbar-width: thin;
+  }
+
+  .pv {
+    width: 250px;
+    flex: none;
+    border-left: 1px solid var(--line);
+    padding: 16px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    box-sizing: border-box;
+  }
+
+  .pbig {
+    height: 140px;
+    width: 100%;
+    object-fit: cover;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .pico {
+    display: grid;
+    place-items: center;
+    height: 110px;
+    margin-bottom: 8px;
+  }
+
+  .pico .ico {
+    width: 68px;
+    height: 68px;
+    border-radius: 18px;
+  }
+
+  .pico .ico-img {
+    width: 68px;
+    height: 68px;
+    border-radius: 18px;
+  }
+
+  .pico .ico svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .pt {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 8px;
+    word-break: break-word;
+  }
+
+  .pm {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--mut);
+  }
+
+  .pm span:last-child {
+    color: var(--fg);
+    text-align: right;
+    word-break: break-all;
   }
 
   .sec {

@@ -1,7 +1,9 @@
+import { findInlineCompletion } from "./autocomplete";
 import {
   MOCK_ITEMS,
   buildSections,
   getCategoryPlaceholder,
+  getItemMetadata,
   hasOnlyFallbackSections,
   mapBackendApp,
   mapBackendFile,
@@ -122,6 +124,28 @@ export function runSearchIntegrationTests(): number {
     assertEqual(mappedFolder.rightLabel, "Folder", "Right label is Folder");
     assertEqual(mappedFolder.primaryLabel, "Open Folder", "Primary label is Open Folder");
     assertEqual(mappedFolder.actions[0].label, "Open Folder", "Primary action is Open Folder");
+  });
+
+  // 1b. Test result preview metadata
+  check(() => {
+    const appMeta = getItemMetadata(mapBackendApp(sampleApp));
+    assertEqual(appMeta[0][1], "Application", "App preview kind");
+    assertEqual(appMeta[1][1], sampleApp.location, "App preview location");
+    assertEqual(appMeta[2][1], "1.0.9000", "App preview version");
+    assertEqual(appMeta[3][1], "120 MB", "App preview size");
+
+    const imageMeta = getItemMetadata(mapBackendFile(sampleImage));
+    assertEqual(imageMeta[0][1], "Image", "Image preview kind");
+    assertEqual(imageMeta[1][1], sampleImage.location, "Image preview location");
+    assertEqual(imageMeta[2][1], "2.4 MB", "Image preview size");
+
+    const docMeta = getItemMetadata(mapBackendFile(sampleDoc));
+    assertEqual(docMeta[0][1], "TXT", "Document preview kind");
+
+    const folderMeta = getItemMetadata(mapBackendFile(sampleFolder));
+    assertEqual(folderMeta[0][1], "Folder", "Folder preview kind");
+    assertEqual(folderMeta[1][1], "D:\\Projects", "Folder preview path");
+    assertEqual(folderMeta[2][1], "—", "Missing folder size uses fallback");
   });
 
   // 2. Test empty query suggestions from backend response
@@ -583,6 +607,46 @@ export function runSearchIntegrationTests(): number {
     assertEqual(queryFolderSections.length, 1, "Query folder section present");
     assertEqual(queryFolderSections[0].items.length, 1, "Only folder item matching query");
     assertEqual(queryFolderSections[0].items[0].name, "Projects", "Projects folder matches");
+  });
+
+  // 26. Inline autocomplete
+  check(() => {
+    const items = [
+      mapBackendApp(sampleApp),
+      mapBackendFile(sampleDoc),
+      mapBackendFile(sampleFolder),
+    ];
+
+    assertEqual(
+      findInlineCompletion("dis", items)?.completion,
+      "cord",
+      "app prefix completes",
+    );
+    assertEqual(
+      findInlineCompletion("DISC", items)?.completion,
+      "ord",
+      "completion is case-insensitive",
+    );
+    assertEqual(
+      findInlineCompletion("pro", items)?.completion,
+      "jects",
+      "folder prefix completes",
+    );
+    assertEqual(
+      findInlineCompletion("discord", items),
+      undefined,
+      "exact names have no completion",
+    );
+    assertEqual(
+      findInlineCompletion("dis ", items),
+      undefined,
+      "trailing whitespace disables completion",
+    );
+    assertEqual(
+      findInlineCompletion("zzz", items),
+      undefined,
+      "missing prefixes have no completion",
+    );
   });
 
   return passed;

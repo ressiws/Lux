@@ -929,9 +929,6 @@
 
               <div class="txt">
                 <span class="t">{item.name}</span>
-                {#if item.sourceApp}
-                  <span class="s">{item.sourceApp}</span>
-                {/if}
               </div>
 
               {#if item.isPinned}
@@ -1545,16 +1542,6 @@
     text-overflow: ellipsis;
   }
 
-  .s {
-    color: var(--mut);
-    white-space: nowrap;
-    font-size: 12.5px;
-    flex: none;
-    user-select: none;
-    -webkit-user-select: none;
-    pointer-events: none;
-  }
-
   .pin-badge {
     font-size: 12px;
     flex: none;
@@ -1950,10 +1937,6 @@
 
   /* Information Density: Minimal */
   /* Show essential content and controls only. Hide nonessential metadata, secondary descriptions, and hints. */
-  .clipboard-root[data-info-density="minimal"] .s,
-  :global(:root[data-info-density="minimal"]) .clipboard-root .s {
-    display: none !important;
-  }
 
   .clipboard-root[data-info-density="minimal"] .r,
   :global(:root[data-info-density="minimal"]) .clipboard-root .r {
@@ -1983,11 +1966,6 @@
 
   /* Information Density: Detailed */
   /* Emphasize metadata and rich guidance */
-  .clipboard-root[data-info-density="detailed"] .s,
-  :global(:root[data-info-density="detailed"]) .clipboard-root .s {
-    opacity: 0.95;
-    font-weight: 500;
-  }
 
   .clipboard-root[data-info-density="detailed"] .foot-detail,
   :global(:root[data-info-density="detailed"]) .clipboard-root .foot-detail {
@@ -2048,11 +2026,6 @@
   .clipboard-root[data-layout-density="compact"] .t,
   :global(:root[data-layout-density="compact"]) .clipboard-root .t {
     font-size: 13px;
-  }
-
-  .clipboard-root[data-layout-density="compact"] .s,
-  :global(:root[data-layout-density="compact"]) .clipboard-root .s {
-    font-size: 11.5px;
   }
 
   .clipboard-root[data-layout-density="compact"] .foot,
@@ -2116,11 +2089,6 @@
   .clipboard-root[data-layout-density="comfortable"] .t,
   :global(:root[data-layout-density="comfortable"]) .clipboard-root .t {
     font-size: 15px;
-  }
-
-  .clipboard-root[data-layout-density="comfortable"] .s,
-  :global(:root[data-layout-density="comfortable"]) .clipboard-root .s {
-    font-size: 13px;
   }
 
   .clipboard-root[data-layout-density="comfortable"] .foot,

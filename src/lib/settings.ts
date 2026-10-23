@@ -23,6 +23,8 @@ export interface SettingsState {
   progressBar: boolean;
   caret: boolean;
   fileSearch: boolean;
+  rememberSearch: boolean;
+  resultPreview: boolean;
   clipboardHistory: boolean;
   flowPrefixCompatibility: boolean;
   flowPrefixes: string[];
@@ -38,12 +40,15 @@ export const DEFAULT_SETTINGS: SettingsState = {
   progressBar: true,
   caret: true,
   fileSearch: true,
+  rememberSearch: false,
+  resultPreview: false,
   clipboardHistory: true,
   flowPrefixCompatibility: true,
   flowPrefixes: ["et"],
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";
+export const LAST_SEARCH_STORAGE_KEY = "lux-last-search";
 export const EVENT_SETTINGS_CHANGED = "lux://settings-changed";
 
 export function loadSettings(): SettingsState {
@@ -82,6 +87,37 @@ export function saveSettings(settings: SettingsState): void {
     // Ignore storage quota or disabled storage errors
   }
   void emit(EVENT_SETTINGS_CHANGED, settings).catch(() => {});
+}
+
+export function loadLastSearch(): string {
+  if (typeof localStorage === "undefined") return "";
+  try {
+    return localStorage.getItem(LAST_SEARCH_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveLastSearch(query: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    if (query.trim().length === 0) {
+      localStorage.removeItem(LAST_SEARCH_STORAGE_KEY);
+    } else {
+      localStorage.setItem(LAST_SEARCH_STORAGE_KEY, query);
+    }
+  } catch {
+    // Ignore storage quota or disabled storage errors
+  }
+}
+
+export function clearLastSearch(): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.removeItem(LAST_SEARCH_STORAGE_KEY);
+  } catch {
+    // Ignore storage quota or disabled storage errors
+  }
 }
 
 export function applyThemeAndCaret(settings: SettingsState): void {
