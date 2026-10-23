@@ -649,6 +649,59 @@ export function runSearchIntegrationTests(): number {
     );
   });
 
+    // 27. Test math query suppresses apps/files/commands sections
+    check(() => {
+      const mockResponse: SearchResponse = {
+        apps: [sampleApp],
+        files: [sampleDoc],
+      };
+      const sections = buildSections("15 * 4", mockResponse, { filter: "all" });
+      assertEqual(sections.length, 1, "Only calc section for math query");
+      assertEqual(sections[0].category, "calc", "First section is calc");
+      assertEqual(sections[0].items[0].name, "60", "Calculated value");
+      const hasApps = sections.some((s) => s.category === "app");
+      const hasFiles = sections.some((s) => s.category === "file");
+      const hasCmds = sections.some((s) => s.category === "cmd");
+      assertEqual(hasApps, false, "No apps section for math query");
+      assertEqual(hasFiles, false, "No files section for math query");
+      assertEqual(hasCmds, false, "No commands section for math query");
+    });
+
+    // 28. Test math query with test items also suppresses other sections
+    check(() => {
+      const sections = buildSections("2 + 2", undefined, {
+        filter: "all",
+        mockItemsForTesting: MOCK_ITEMS,
+      });
+      assertEqual(sections.length, 1, "Only calc section for math query with test items");
+      assertEqual(sections[0].category, "calc", "First section is calc");
+    });
+
+    // 29. Test non-math query still shows all sections
+    check(() => {
+      const mockResponse: SearchResponse = {
+        apps: [sampleApp],
+        files: [sampleDoc],
+      };
+      const sections = buildSections("discord", mockResponse, { filter: "all" });
+      const hasCalc = sections.some((s) => s.category === "calc");
+      const hasApps = sections.some((s) => s.category === "app");
+      const hasFiles = sections.some((s) => s.category === "file");
+      assertEqual(hasCalc, false, "No calc section for non-math query");
+      assertEqual(hasApps, true, "Apps section present for non-math query");
+      assertEqual(hasFiles, true, "Files section present for non-math query");
+    });
+
+    // 30. Test inline autocomplete function works (setting checked in UI layer)
+    check(() => {
+      const items = [
+        mapBackendApp(sampleApp),
+        mapBackendFile(sampleDoc),
+      ];
+      const completion = findInlineCompletion("dis", items);
+      assertEqual(completion?.completion, "cord", "autocomplete function works");
+    });
+
   return passed;
 }
 

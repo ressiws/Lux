@@ -28,6 +28,8 @@ export interface SettingsState {
   clipboardHistory: boolean;
   flowPrefixCompatibility: boolean;
   flowPrefixes: string[];
+  inlineAutocomplete: boolean;
+  showFrequent: boolean;
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -45,6 +47,8 @@ export const DEFAULT_SETTINGS: SettingsState = {
   clipboardHistory: true,
   flowPrefixCompatibility: true,
   flowPrefixes: ["et"],
+  inlineAutocomplete: true,
+  showFrequent: true,
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";

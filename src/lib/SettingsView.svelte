@@ -930,6 +930,36 @@
 
         <div class="srow">
           <div>
+            <b>Show inline autocomplete</b>
+            <small class="desc">Show completion suggestion in the search bar</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.inlineAutocomplete}
+            aria-label="Show inline autocomplete"
+            onclick={() => setSetting("inlineAutocomplete", !settings.inlineAutocomplete)}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
+            <b>Show Frequently Used</b>
+            <small class="desc">Show recently used apps and folders when search is empty</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.showFrequent}
+            aria-label="Show Frequently Used"
+            onclick={() => setSetting("showFrequent", !settings.showFrequent)}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
             <b>File Previews (Quick Look)</b>
             <small class="desc">Instant file preview window triggered by Space</small>
           </div>

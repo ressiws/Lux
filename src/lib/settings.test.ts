@@ -307,16 +307,38 @@ console.log("Running Settings and Density unit tests...");
 }
 
 // 15. Invalid usage data is ignored safely
-{
-  localStorage.clear();
-  localStorage.setItem(ITEM_USAGE_STORAGE_KEY, "{not-json");
-  assertEqual(loadUsageEntries().length, 0, "malformed usage data is ignored");
+  {
+    localStorage.clear();
+    localStorage.setItem(ITEM_USAGE_STORAGE_KEY, "{not-json");
+    assertEqual(loadUsageEntries().length, 0, "malformed usage data is ignored");
 
-  localStorage.setItem(
-    ITEM_USAGE_STORAGE_KEY,
-    JSON.stringify([{ key: "invalid", count: -1 }]),
-  );
-  assertEqual(loadUsageEntries().length, 0, "invalid usage entries are discarded");
-}
+    localStorage.setItem(
+      ITEM_USAGE_STORAGE_KEY,
+      JSON.stringify([{ key: "invalid", count: -1 }]),
+    );
+    assertEqual(loadUsageEntries().length, 0, "invalid usage entries are discarded");
+  }
+
+  // 16. New settings have correct defaults
+  {
+    localStorage.clear();
+    const settings = loadSettings();
+    assertEqual(settings.inlineAutocomplete, true, "inlineAutocomplete defaults to true");
+    assertEqual(settings.showFrequent, true, "showFrequent defaults to true");
+  }
+
+  // 17. New settings persist correctly
+  {
+    localStorage.clear();
+    const state: SettingsState = {
+      ...DEFAULT_SETTINGS,
+      inlineAutocomplete: false,
+      showFrequent: false,
+    };
+    saveSettings(state);
+    const reloaded = loadSettings();
+    assertEqual(reloaded.inlineAutocomplete, false, "inlineAutocomplete persists");
+    assertEqual(reloaded.showFrequent, false, "showFrequent persists");
+  }
 
 console.log("Settings and Density unit tests passed successfully.");

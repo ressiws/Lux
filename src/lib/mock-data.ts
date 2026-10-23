@@ -722,6 +722,8 @@ export function buildSections(
         },
       ],
     });
+
+    return sections;
   }
 
   if (searchResponse) {

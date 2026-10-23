@@ -58,7 +58,9 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { resolvePrefix } from "$lib/prefix";
 
-  import { findInlineCompletion } from "$lib/autocomplete";
+import { findInlineCompletion } from "$lib/autocomplete";
+
+  import { evaluateMathExpression } from "$lib/calculator";
 
   import {
     getFrequentItems,
@@ -189,15 +191,23 @@
           : undefined,
   );
 
-  const frequentItems = $derived(
-    frequentMode ? getFrequentItems(usageEntries, frequentMode, 4) : [],
-  );
+const isMathQuery = $derived(!!evaluateMathExpression(effectiveQuery.trim()));
+
+  const frequentItems = $derived(
+    !settings.showFrequent || isMathQuery || !frequentMode
+      ? []
+      : getFrequentItems(usageEntries, frequentMode, 4),
+  );
 
   const flatItems = $derived([...frequentItems, ...flatResultItems]);
 
-  const inlineCompletion = $derived(
-    isIdle ? undefined : findInlineCompletion(effectiveQuery, flatResultItems),
-  );
+const inlineCompletion = $derived(
+    !settings.inlineAutocomplete
+      ? undefined
+      : isIdle
+        ? undefined
+        : findInlineCompletion(effectiveQuery, flatResultItems),
+  );
 
   const visibleSections = $derived.by<LauncherSection[]>(() => {
     if (flatResultItems.length <= visibleCount) {
@@ -996,8 +1006,7 @@
       !event.shiftKey &&
       !event.ctrlKey &&
       !event.altKey &&
-      !event.metaKey &&
-      inlineCompletion &&
+      !event.metaKey && settings.inlineAutocomplete && inlineCompletion &&
       !hasNavigatedList &&
       document.activeElement === searchInput
     ) {
@@ -1580,7 +1589,7 @@
       </span>
     {/if}
     <div class="query-field">
-      {#if inlineCompletion && isQueryFocused && !actionsOpen}
+      {#if settings.inlineAutocomplete && inlineCompletion && isQueryFocused && !actionsOpen}
         <span class="query-ghost" aria-hidden="true">
           <span class="query-typed">{query}</span>{inlineCompletion.completion}<span class="query-hint"> — Open</span>
         </span>
