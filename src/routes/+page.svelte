@@ -122,11 +122,8 @@
 
   let usageEntries = $state<ItemUsage[]>(loadUsageEntries());
 
-  let isOpening = $state(false);
-
   let isQueryFocused = $state(false);
 
-  let openingTimer: ReturnType<typeof setTimeout> | undefined;
   let searchBarVisible = $state(false);
   let activeFilter = $state<SearchFilter>("all");
   let activeSubcategory = $state<string>("all");
@@ -1242,14 +1239,6 @@
     return CATEGORY_ICONS[item.category] ?? CATEGORY_ICONS.file;
   }
 
-  function triggerOpeningAnimation(): void {
-    clearTimeout(openingTimer);
-    isOpening = true;
-    openingTimer = setTimeout(() => {
-      isOpening = false;
-    }, 200);
-  }
-
   onMount(() => {
     applyThemeAndCaret(settings);
     if (windowLabel !== "main") {
@@ -1391,7 +1380,6 @@
 
     void onLauncherShown(() => {
       if (appMode === "launcher") {
-        triggerOpeningAnimation();
         usageEntries = loadUsageEntries();
         resetLauncherState(true, getRestoredQuery());
       }
@@ -1404,8 +1392,6 @@
     });
 
     void onLauncherHidden(() => {
-      clearTimeout(openingTimer);
-      isOpening = false;
       resetLauncherState(false);
       lastSyncedHeight = undefined;
       windowExpanded = false;
@@ -1455,7 +1441,6 @@
       clearTimeout(feedbackTimer);
       clearTimeout(searchDebounceTimer);
       clearTimeout(searchProgressTimer);
-      clearTimeout(openingTimer);
       unlistenShown?.();
       unlistenHidden?.();
       unlistenIndexing?.();
@@ -1482,7 +1467,6 @@
   id="win"
   class:idle={isIdle}
   class:collapsing={isCollapsing}
-  class:opening={isOpening}
   role="dialog"
   aria-label="Lux command palette"
 >
@@ -2304,23 +2288,6 @@
     flex-direction: column;
   }
 
-  .win.opening {
-    animation: launcher-open 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
-    transform-origin: center top;
-  }
-
-  @keyframes launcher-open {
-    from {
-      opacity: 0;
-      transform: translateY(6px) scale(0.99);
-    }
-
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
-  }
-
   .win.idle {
     width: 100%;
     height: 100%;
@@ -2725,10 +2692,6 @@
     .filter-btn,
     .subcat-chip {
       transition: none !important;
-    }
-
-    .win.opening {
-      animation: none;
     }
   }
 
