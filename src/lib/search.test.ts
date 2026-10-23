@@ -1,3 +1,4 @@
+import { findInlineCompletion } from "./autocomplete";
 import {
   MOCK_ITEMS,
   buildSections,
@@ -606,6 +607,46 @@ export function runSearchIntegrationTests(): number {
     assertEqual(queryFolderSections.length, 1, "Query folder section present");
     assertEqual(queryFolderSections[0].items.length, 1, "Only folder item matching query");
     assertEqual(queryFolderSections[0].items[0].name, "Projects", "Projects folder matches");
+  });
+
+  // 26. Inline autocomplete
+  check(() => {
+    const items = [
+      mapBackendApp(sampleApp),
+      mapBackendFile(sampleDoc),
+      mapBackendFile(sampleFolder),
+    ];
+
+    assertEqual(
+      findInlineCompletion("dis", items)?.completion,
+      "cord",
+      "app prefix completes",
+    );
+    assertEqual(
+      findInlineCompletion("DISC", items)?.completion,
+      "ord",
+      "completion is case-insensitive",
+    );
+    assertEqual(
+      findInlineCompletion("pro", items)?.completion,
+      "jects",
+      "folder prefix completes",
+    );
+    assertEqual(
+      findInlineCompletion("discord", items),
+      undefined,
+      "exact names have no completion",
+    );
+    assertEqual(
+      findInlineCompletion("dis ", items),
+      undefined,
+      "trailing whitespace disables completion",
+    );
+    assertEqual(
+      findInlineCompletion("zzz", items),
+      undefined,
+      "missing prefixes have no completion",
+    );
   });
 
   return passed;

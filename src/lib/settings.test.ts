@@ -15,6 +15,13 @@ import {
   type SettingsCategory,
   type SettingsState,
 } from "./settings";
+import {
+  ITEM_USAGE_STORAGE_KEY,
+  getFrequentItems,
+  loadUsageEntries,
+  recordItemUsage,
+} from "./usage";
+import type { LauncherItem } from "./types";
 
 function assertEqual<T>(actual: T, expected: T, message?: string): void {
   if (actual !== expected) {
@@ -231,6 +238,85 @@ console.log("Running Settings and Density unit tests...");
   const reloaded = loadSettings();
   assertEqual(reloaded.rememberSearch, true, "remember search persists");
   assertEqual(reloaded.resultPreview, true, "result preview persists");
+}
+
+// 14. Local item usage tracking
+{
+  localStorage.clear();
+  const app: LauncherItem = {
+    category: "app",
+    name: "Firefox",
+    subtitle: "Start Menu",
+    keywords: "",
+    rightLabel: "Application",
+    primaryLabel: "Open Application",
+    actions: [],
+    path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Firefox.lnk",
+    location: "C:\\Program Files\\Firefox\\firefox.exe",
+  };
+  const folder: LauncherItem = {
+    category: "file",
+    name: "Projects",
+    subtitle: "D:\\Projects",
+    keywords: "",
+    rightLabel: "Folder",
+    primaryLabel: "Open Folder",
+    actions: [],
+    path: "D:\\Projects",
+    location: "D:\\Projects",
+  };
+  const doc: LauncherItem = {
+    category: "file",
+    name: "notes.txt",
+    subtitle: "D:\\notes.txt",
+    keywords: "",
+    rightLabel: "TXT",
+    primaryLabel: "Open TXT",
+    actions: [],
+    path: "D:\\notes.txt",
+    location: "D:\\",
+  };
+
+  recordItemUsage(app, 1000);
+  recordItemUsage(folder, 2000);
+  recordItemUsage(app, 3000);
+  recordItemUsage(doc, 1500);
+
+  const entries = loadUsageEntries();
+  assertEqual(entries.length, 3, "usage tracks distinct items");
+  assertEqual(
+    entries.find((entry) => entry.name === "Firefox")?.count,
+    2,
+    "usage increments repeated launches",
+  );
+  assertEqual(
+    localStorage.getItem(ITEM_USAGE_STORAGE_KEY) !== null,
+    true,
+    "usage is persisted locally",
+  );
+
+  const all = getFrequentItems(entries, "all", 4);
+  assertEqual(all.length, 3, "all mode returns tracked items");
+  assertEqual(all[0].name, "Firefox", "most launched item ranks first");
+  assertEqual(getFrequentItems(entries, "apps", 4).length, 1, "apps mode filters items");
+  assertEqual(
+    getFrequentItems(entries, "folders", 4)[0]?.name,
+    "Projects",
+    "folders mode keeps only folders",
+  );
+}
+
+// 15. Invalid usage data is ignored safely
+{
+  localStorage.clear();
+  localStorage.setItem(ITEM_USAGE_STORAGE_KEY, "{not-json");
+  assertEqual(loadUsageEntries().length, 0, "malformed usage data is ignored");
+
+  localStorage.setItem(
+    ITEM_USAGE_STORAGE_KEY,
+    JSON.stringify([{ key: "invalid", count: -1 }]),
+  );
+  assertEqual(loadUsageEntries().length, 0, "invalid usage entries are discarded");
 }
 
 console.log("Settings and Density unit tests passed successfully.");

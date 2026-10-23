@@ -56,7 +56,17 @@
     type SubcategoryItem,
   } from "$lib/classification";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { resolvePrefix } from "$lib/prefix";
+  import { resolvePrefix } from "$lib/prefix";
+
+  import { findInlineCompletion } from "$lib/autocomplete";
+
+  import {
+    getFrequentItems,
+    loadUsageEntries,
+    recordItemUsage,
+    type FrequentMode,
+    type ItemUsage,
+  } from "$lib/usage";
   import type {
     FeaturesConfig,
     IndexStats,
@@ -108,7 +118,15 @@
   let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let isSearching = $state(false);
   let isPreviewOpen = $state(false);
-  let hasNavigatedList = $state(false);
+  let hasNavigatedList = $state(false);
+
+  let usageEntries = $state<ItemUsage[]>(loadUsageEntries());
+
+  let isOpening = $state(false);
+
+  let isQueryFocused = $state(false);
+
+  let openingTimer: ReturnType<typeof setTimeout> | undefined;
   let searchBarVisible = $state(false);
   let activeFilter = $state<SearchFilter>("all");
   let activeSubcategory = $state<string>("all");
@@ -160,10 +178,32 @@
       defaultBrowser,
     }),
   );
-  const flatItems = $derived(sections.flatMap((section) => section.items));
+  const flatResultItems = $derived(
+    sections.flatMap((section) => section.items),
+  );
+
+  const frequentMode = $derived<FrequentMode | undefined>(
+    activeFilter === "all"
+      ? "all"
+      : activeFilter === "apps"
+        ? "apps"
+        : activeFilter === "files" && activeSubcategory === "folders"
+          ? "folders"
+          : undefined,
+  );
+
+  const frequentItems = $derived(
+    frequentMode ? getFrequentItems(usageEntries, frequentMode, 4) : [],
+  );
+
+  const flatItems = $derived([...frequentItems, ...flatResultItems]);
+
+  const inlineCompletion = $derived(
+    isIdle ? undefined : findInlineCompletion(effectiveQuery, flatResultItems),
+  );
 
   const visibleSections = $derived.by<LauncherSection[]>(() => {
-    if (flatItems.length <= visibleCount) {
+    if (flatResultItems.length <= visibleCount) {
       return sections;
     }
     let remaining = visibleCount;
@@ -184,7 +224,7 @@
     return sliced;
   });
   const showViewSelector = $derived(
-    (isBrowseMode || !isIdle) && flatItems.length > 0 && !hasOnlyFallbackSections(sections),
+    (isBrowseMode || !isIdle) && flatResultItems.length > 0 && !hasOnlyFallbackSections(sections),
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
@@ -198,7 +238,7 @@
     ),
   );
   const showEmptyState = $derived(
-    (flatItems.length === 0 || hasOnlyFallbackSections(sections)) &&
+    (flatResultItems.length === 0 || hasOnlyFallbackSections(sections)) &&
       (effectiveQuery.trim().length > 0 || isBrowseMode),
   );
   const displayedMessage = $derived(feedbackMessage || shortcutWarning);
@@ -210,15 +250,15 @@
   let observer: IntersectionObserver | undefined;
   $effect(() => {
     if (windowLabel !== "main") return;
-    if (sentinelElement && visibleCount < flatItems.length) {
+    if (sentinelElement && visibleCount < flatResultItems.length) {
       observer?.disconnect();
       if (typeof IntersectionObserver !== "undefined") {
         observer = new IntersectionObserver(
           (entries) => {
             if (entries[0]?.isIntersecting) {
-              if (visibleCount < flatItems.length) {
+              if (visibleCount < flatResultItems.length) {
                 visibleCount = Math.min(
-                  flatItems.length,
+                  flatResultItems.length,
                   visibleCount + getBatchSize(activeFilter),
                 );
               }
@@ -233,11 +273,11 @@
   });
 
   function handleListScroll(): void {
-    if (!listContainer || visibleCount >= flatItems.length) return;
+    if (!listContainer || visibleCount >= flatResultItems.length) return;
     const { scrollTop, scrollHeight, clientHeight } = listContainer;
     if (scrollHeight - scrollTop - clientHeight < 200) {
       visibleCount = Math.min(
-        flatItems.length,
+        flatResultItems.length,
         visibleCount + getBatchSize(activeFilter),
       );
     }
@@ -356,10 +396,14 @@
     });
   }
 
+  function getInitialSelectedIndex(): number {
+    return effectiveQuery.trim().length > 0 ? frequentItems.length : 0;
+  }
+
   function setQuery(val: string): void {
     query = val;
     activeSubcategory = "all";
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
@@ -400,7 +444,7 @@
     activeSubcategory = "all";
     browseResponse = undefined;
     visibleCount = getBatchSize("all");
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     focusSearchInput();
     if (query.trim().length > 0) {
@@ -411,7 +455,7 @@
   function selectSubcategory(subcatId: string): void {
     activeSubcategory = subcatId;
     visibleCount = getBatchSize(activeFilter);
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     focusSearchInput();
   }
@@ -425,7 +469,8 @@
       activeFilter = filter;
       void loadBrowseData(filter);
     }
-    selectedIndex = 0;
+
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     focusSearchInput();
@@ -450,7 +495,7 @@
     actionsOpen = false;
     selectedActionIndex = 0;
     query = restoredQuery;
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     opSeq++;
     isSearching = false;
     searchBarVisible = false;
@@ -592,6 +637,7 @@
       isLaunching = true;
       try {
         await openTarget(item.path);
+        usageEntries = recordItemUsage(item);
         await dismissLauncher();
       } catch (err) {
         say(`Failed to open: ${err}`);
@@ -709,6 +755,7 @@
         isLaunching = true;
         try {
           await openTargetAsAdmin(item.path);
+          usageEntries = recordItemUsage(item);
           await dismissLauncher();
         } catch (err) {
           say(`Failed to run as admin: ${err}`);
@@ -743,12 +790,36 @@
     }
   }
 
+  async function acceptInlineCompletion(): Promise<void> {
+    const suggestion = inlineCompletion;
+    if (!suggestion) {
+      return;
+    }
+
+    const nextQuery = `${query}${suggestion.completion}`;
+    query = nextQuery;
+    hasNavigatedList = false;
+    selectedIndex = getInitialSelectedIndex();
+    selectedActionIndex = 0;
+    actionsOpen = false;
+
+    clearTimeout(searchDebounceTimer);
+    if (settings.rememberSearch) {
+      saveLastSearch(query);
+    }
+
+    void performSearch(effectiveQuery);
+    focusSearchInput();
+    await tick();
+    searchInput?.setSelectionRange(nextQuery.length, nextQuery.length);
+  }
+
   function handleQueryInput(): void {
     if (settings.rememberSearch) {
       saveLastSearch(query);
     }
     hasNavigatedList = false;
-    selectedIndex = 0;
+    selectedIndex = getInitialSelectedIndex();
     selectedActionIndex = 0;
     actionsOpen = false;
     clearTimeout(searchDebounceTimer);
@@ -924,6 +995,29 @@
     }
 
     if (
+      (event.key === "Tab" || event.key === "ArrowRight") &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      inlineCompletion &&
+      !hasNavigatedList &&
+      document.activeElement === searchInput
+    ) {
+      const input = searchInput;
+      if (
+        input &&
+        input.selectionStart === input.value.length &&
+        input.selectionEnd === input.value.length
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        await acceptInlineCompletion();
+        return;
+      }
+    }
+
+    if (
       (event.ctrlKey || event.metaKey) &&
       event.shiftKey &&
       event.key === "Enter" &&
@@ -935,6 +1029,7 @@
       isLaunching = true;
       try {
         await openTargetAsAdmin(selectedItem.path);
+        usageEntries = recordItemUsage(selectedItem);
         await dismissLauncher();
       } catch (err) {
         say(`Failed to run as admin: ${err}`);
@@ -1147,12 +1242,22 @@
     return CATEGORY_ICONS[item.category] ?? CATEGORY_ICONS.file;
   }
 
+  function triggerOpeningAnimation(): void {
+    clearTimeout(openingTimer);
+    isOpening = true;
+    openingTimer = setTimeout(() => {
+      isOpening = false;
+    }, 200);
+  }
+
   onMount(() => {
     applyThemeAndCaret(settings);
     if (windowLabel !== "main") {
       return;
     }
     query = getRestoredQuery();
+    selectedIndex = getInitialSelectedIndex();
+
     focusSearchInput();
     void performSearch(effectiveQuery);
     const idleH = getIdleLauncherHeight(
@@ -1286,6 +1391,8 @@
 
     void onLauncherShown(() => {
       if (appMode === "launcher") {
+        triggerOpeningAnimation();
+        usageEntries = loadUsageEntries();
         resetLauncherState(true, getRestoredQuery());
       }
     }).then((unlisten) => {
@@ -1297,6 +1404,8 @@
     });
 
     void onLauncherHidden(() => {
+      clearTimeout(openingTimer);
+      isOpening = false;
       resetLauncherState(false);
       lastSyncedHeight = undefined;
       windowExpanded = false;
@@ -1346,6 +1455,7 @@
       clearTimeout(feedbackTimer);
       clearTimeout(searchDebounceTimer);
       clearTimeout(searchProgressTimer);
+      clearTimeout(openingTimer);
       unlistenShown?.();
       unlistenHidden?.();
       unlistenIndexing?.();
@@ -1372,6 +1482,7 @@
   id="win"
   class:idle={isIdle}
   class:collapsing={isCollapsing}
+  class:opening={isOpening}
   role="dialog"
   aria-label="Lux command palette"
 >
@@ -1484,16 +1595,25 @@
         {prefixResolution.prefix}
       </span>
     {/if}
-    <input
-      id="q"
-      bind:this={searchInput}
-      bind:value={query}
-      oninput={handleQueryInput}
-      autocomplete="off"
-      spellcheck="false"
-      placeholder={getCategoryPlaceholder(activeFilter)}
-      aria-label="Search"
-    />
+    <div class="query-field">
+      {#if inlineCompletion && isQueryFocused && !actionsOpen}
+        <span class="query-ghost" aria-hidden="true">
+          <span class="query-typed">{query}</span>{inlineCompletion.completion}<span class="query-hint"> — Open</span>
+        </span>
+      {/if}
+      <input
+        id="q"
+        bind:this={searchInput}
+        bind:value={query}
+        oninput={handleQueryInput}
+        onfocus={() => (isQueryFocused = true)}
+        onblur={() => (isQueryFocused = false)}
+        autocomplete="off"
+        spellcheck="false"
+        placeholder={getCategoryPlaceholder(activeFilter)}
+        aria-label="Search"
+      />
+    </div>
     <div class="spin" aria-hidden="true"></div>
 
     {#if showViewSelector}
@@ -1667,6 +1787,50 @@
 
   <div class="body">
     <div id="list" role="listbox" aria-label="Results" bind:this={listContainer} onscroll={handleListScroll}>
+      {#if frequentItems.length > 0}
+        <div class="sec">Frequently used</div>
+        <div class="grid">
+          {#each frequentItems as item, itemIdx (item.category + ":" + (item.path || item.name))}
+            {@const disp = getItemDisplayIcon(item)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              class="tile row-item"
+              class:on={itemIdx === selectedIndex}
+              data-i={itemIdx}
+              role="option"
+              tabindex="-1"
+              aria-selected={itemIdx === selectedIndex}
+              onmousedown={preventFocusLossOnMouseDown}
+              onmousemove={() => handleRowHover(itemIdx)}
+              onclick={() => handleRowClick(itemIdx)}
+              oncontextmenu={(e) => handleRowContextMenu(e, itemIdx)}
+            >
+              {#if disp.type === "thumb" && disp.src}
+                <img class="thumb" src={disp.src} alt="" />
+              {:else if disp.type === "shell" && disp.src}
+                <img class="ico-img" src={disp.src} alt="" />
+              {:else}
+                <div class="ico g" style={disp.color ? `color: ${disp.color};` : ""}>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d={disp.path ?? getCategoryIconPath(item)} />
+                  </svg>
+                </div>
+              {/if}
+              <span class="t">{item.name}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if showEmptyState}
         <div class="empty">
           <svg
@@ -1869,7 +2033,7 @@
           {/each}
         {/if}
       {/each}
-      {#if visibleCount < flatItems.length}
+      {#if visibleCount < flatResultItems.length}
         <div class="sentinel" bind:this={sentinelElement} aria-hidden="true"></div>
       {/if}
     </div>
@@ -2140,6 +2304,23 @@
     flex-direction: column;
   }
 
+  .win.opening {
+    animation: launcher-open 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform-origin: center top;
+  }
+
+  @keyframes launcher-open {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.99);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
   .win.idle {
     width: 100%;
     height: 100%;
@@ -2241,9 +2422,48 @@
     height: 22px;
   }
 
+  .query-field {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+  }
+
+  .query-ghost {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    padding: 1px 2px;
+    color: var(--dim);
+    font:
+      400 22px Inter,
+      "Segoe UI",
+      system-ui,
+      sans-serif;
+    letter-spacing: -0.01em;
+    white-space: pre;
+    pointer-events: none;
+  }
+
+  .query-ghost .query-typed {
+    color: transparent;
+  }
+
+  .query-hint {
+    color: var(--dim);
+    opacity: 0.68;
+  }
+
   #q {
     flex: 1;
     min-width: 0;
+    position: relative;
+    z-index: 1;
     background: none;
     border: 0;
     outline: 0;
@@ -2505,6 +2725,10 @@
     .filter-btn,
     .subcat-chip {
       transition: none !important;
+    }
+
+    .win.opening {
+      animation: none;
     }
   }
 
