@@ -6,6 +6,7 @@ import {
   getItemDisplayIcon,
   getItemMetadata,
   hasOnlyFallbackSections,
+  isSearchWithoutResults,
   mapBackendApp,
   mapBackendFile,
   scoreItem,
@@ -767,6 +768,44 @@ export function runSearchIntegrationTests(): number {
       ];
       const completion = findInlineCompletion("dis", items);
       assertEqual(completion?.completion, "cord", "autocomplete function works");
+    });
+
+    // 31. Test non-empty query with only fallback sections is treated as no results
+    check(() => {
+      const sections = buildSections(
+        "no-such-item-xyz",
+        { apps: [], files: [] },
+        { filter: "all" },
+      );
+      assertEqual(
+        isSearchWithoutResults("no-such-item-xyz", sections),
+        true,
+        "Fallback-only search is treated as no results",
+      );
+    });
+
+    // 32. Test non-empty query with actual results is not treated as no results
+    check(() => {
+      const sections = buildSections(
+        "discord",
+        { apps: [sampleApp], files: [] },
+        { filter: "all" },
+      );
+      assertEqual(
+        isSearchWithoutResults("discord", sections),
+        false,
+        "Search with matching results remains visible",
+      );
+    });
+
+    // 33. Test empty query preserves existing home-section behavior
+    check(() => {
+      const sections = buildSections("", { apps: [], files: [] }, { filter: "all" });
+      assertEqual(
+        isSearchWithoutResults("", sections),
+        false,
+        "Empty query is not treated as a no-results search",
+      );
     });
 
   return passed;

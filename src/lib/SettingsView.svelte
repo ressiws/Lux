@@ -945,6 +945,21 @@
 
         <div class="srow">
           <div>
+            <b>Show Favorites</b>
+            <small class="desc">Show pinned apps, files, and folders when search is empty</small>
+          </div>
+          <button
+            class="sw"
+            type="button"
+            role="switch"
+            aria-checked={settings.showFavorites}
+            aria-label="Show Favorites"
+            onclick={() => setSetting("showFavorites", !settings.showFavorites)}
+          ></button>
+        </div>
+
+        <div class="srow">
+          <div>
             <b>Show Frequently Used</b>
             <small class="desc">Show recently used apps and folders when search is empty</small>
           </div>

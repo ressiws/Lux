@@ -30,6 +30,7 @@ export interface SettingsState {
   flowPrefixes: string[];
   inlineAutocomplete: boolean;
   showFrequent: boolean;
+  showFavorites: boolean;
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -49,6 +50,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   flowPrefixes: ["et"],
   inlineAutocomplete: true,
   showFrequent: true,
+  showFavorites: true,
 };
 
 export const SETTINGS_STORAGE_KEY = "lux-settings";

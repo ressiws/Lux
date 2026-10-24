@@ -1,6 +1,7 @@
 import {
   evaluateMathExpression,
   formatCalculatorNumber,
+  getIntegerQuickAnswerDetails,
   matchCurrencyConversion,
   matchTimeZoneConversion,
   matchDateDuration,
@@ -441,6 +442,65 @@ export function runCalculatorTests(): number {
 
   check(() => {
     assertEqual(formatCalculatorNumber(-0), "0", "Formats -0 as 0");
+  });
+
+  // 18. Integer quick answer details
+  check(() => {
+    const result = evaluateMathExpression("32 / 16");
+    if (!result) {
+      throw new Error("Expected integer expression to evaluate");
+    }
+    const details = getIntegerQuickAnswerDetails(result);
+    assertEqual(details[0]?.label, "Hex", "Integer hex label");
+    assertEqual(details[0]?.value, "0x2", "Integer hex value");
+    assertEqual(details[1]?.label, "Binary", "Integer binary label");
+    assertEqual(details[1]?.value, "10", "Integer binary value");
+  });
+  check(() => {
+    const details = getIntegerQuickAnswerDetails({
+      value: "-5",
+      expression: "-5",
+      label: "Calculator",
+      raw: "-5",
+      categoryLabel: "Calculation",
+    });
+    assertEqual(details[0]?.value, "-0x5", "Negative integer hex value");
+    assertEqual(details[1]?.value, "-101", "Negative integer binary value");
+  });
+  check(() => {
+    const result = evaluateMathExpression("10 / 4");
+    if (!result) {
+      throw new Error("Expected decimal expression to evaluate");
+    }
+    assertEqual(
+      getIntegerQuickAnswerDetails(result).length,
+      0,
+      "Decimal results have no integer details",
+    );
+  });
+  check(() => {
+    assertEqual(
+      getIntegerQuickAnswerDetails({
+        value: "8",
+        expression: "8",
+        label: "Unit conversion",
+        raw: "8",
+        categoryLabel: "Conversion",
+      }).length,
+      0,
+      "Non-calculator results have no integer details",
+    );
+    assertEqual(
+      getIntegerQuickAnswerDetails({
+        value: "9007199254740992",
+        expression: "9007199254740992",
+        label: "Calculator",
+        raw: "9007199254740992",
+        categoryLabel: "Calculator",
+      }).length,
+      0,
+      "Unsafe integers have no integer details",
+    );
   });
 
   return passed;

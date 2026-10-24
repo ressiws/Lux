@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import ClipboardView from "$lib/ClipboardView.svelte";
-  import {
-    CATEGORY_ICONS,
+  import {
+    CATEGORY_ICONS,
+
     buildSections,
     getCategoryPlaceholder,
-    hasOnlyFallbackSections,
+    hasOnlyFallbackSections,
+    isSearchWithoutResults,
+
     splitHighlight,
     getItemDisplayIcon,
     getItemMetadata,
@@ -19,27 +22,36 @@
     onFeaturesChanged,
     onIndexingStatus,
     onLauncherHidden,
-    onLauncherShown,
-    onOpenClipboard,
+    onLauncherShown,
+    onOpenClipboard,
+
     onOpenLauncher,
     openSettings,
     openTarget,
     browseLauncher,
     openTargetAsAdmin,
     reindex,
-    revealItemInFolder,
+    revealItemInFolder,
+
     searchLauncher,
     setLauncherHeight,
     setWindowHeight,
     getDefaultBrowser,
-    showPreview,
-    hidePreview,
+    showPreview,
+
+    hidePreview,
+
     togglePreview,
     onOpenPreview,
     onClosePreview,
   } from "$lib/tauri";
-  import SettingsView from "$lib/SettingsView.svelte";
-  import QuickLookView from "$lib/QuickLookView.svelte";
+  import SettingsView from "$lib/SettingsView.svelte";
+
+  import QuickLookView from "$lib/QuickLookView.svelte";
+
+  import QuickAnswerResult from "$lib/QuickAnswerResult.svelte";
+
+  import FavoriteButton from "$lib/FavoriteButton.svelte";
   import {
     applyThemeAndCaret,
     getIdleLauncherHeight,
@@ -52,6 +64,8 @@
   } from "$lib/settings";
   import type { SearchFilter, BuildSectionsOptions } from "$lib/mock-data";
   import {
+    classifyFile,
+
     getAvailableSubcategories,
     type SubcategoryItem,
   } from "$lib/classification";
@@ -60,7 +74,10 @@
 
 import { findInlineCompletion } from "$lib/autocomplete";
 
-  import { evaluateMathExpression } from "$lib/calculator";
+  import {
+    evaluateMathExpression,
+    getIntegerQuickAnswerDetails,
+  } from "$lib/calculator";
 
   import {
     getFrequentItems,
@@ -69,6 +86,13 @@ import { findInlineCompletion } from "$lib/autocomplete";
     type FrequentMode,
     type ItemUsage,
   } from "$lib/usage";
+  import {
+    getFavoriteItems,
+    getFavoriteKey,
+    loadFavoriteEntries,
+    toggleFavoriteItem,
+    type FavoriteEntry,
+  } from "$lib/favorites";
   import type {
     FeaturesConfig,
     IndexStats,
@@ -97,32 +121,48 @@ import { findInlineCompletion } from "$lib/autocomplete";
   let actionsOpen = $state(false);
   let feedbackMessage = $state("");
   let shortcutWarning = $state("");
-  let searchResponse = $state<SearchResponse | undefined>();
-  let windowExpanded = $state(false);
+  let searchResponse = $state<SearchResponse | undefined>();
+
+  let windowExpanded = $state(false);
+
   let isIndexing = $state(false);
   let indexStats = $state<IndexStats>({
     totalApps: 0,
     totalFiles: 0,
     isIndexed: false,
   });
-  let appMode = $state<"launcher" | "clipboard">("launcher");
+  let appMode = $state<"launcher" | "clipboard">("launcher");
   let featuresConfig = $state<FeaturesConfig>({ clipboardHistory: true });
-
-  let settings = $state<SettingsState>(loadSettings());
-  let defaultBrowser = $state<DefaultBrowserInfo | undefined>(undefined);
-  let isLaunching = false;
-
-  let searchInput: HTMLInputElement | undefined = $state();
-  let listContainer: HTMLDivElement | undefined = $state();
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
-  let opSeq = 0;
-  let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
-  let isSearching = $state(false);
-  let isPreviewOpen = $state(false);
+
+  let settings = $state<SettingsState>(loadSettings());
+
+  let defaultBrowser = $state<DefaultBrowserInfo | undefined>(undefined);
+
+  let isLaunching = false;
+
+
+
+  let searchInput: HTMLInputElement | undefined = $state();
+
+  let listContainer: HTMLDivElement | undefined = $state();
+
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let opSeq = 0;
+
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let searchProgressTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let isSearching = $state(false);
+
+  let isPreviewOpen = $state(false);
+
   let hasNavigatedList = $state(false);
 
   let usageEntries = $state<ItemUsage[]>(loadUsageEntries());
+
+  let favoriteEntries = $state<FavoriteEntry[]>(loadFavoriteEntries());
 
   let isQueryFocused = $state(false);
 
@@ -143,8 +183,10 @@ import { findInlineCompletion } from "$lib/autocomplete";
     resolvePrefix(
       query,
       settings.flowPrefixCompatibility,
-      settings.flowPrefixes,
-    ),
+      settings.flowPrefixes,
+
+    ),
+
   );
   const effectiveQuery = $derived(prefixResolution.effectiveQuery);
   const isBrowseMode = $derived(activeFilter !== "all");
@@ -181,6 +223,10 @@ import { findInlineCompletion } from "$lib/autocomplete";
     sections.flatMap((section) => section.items),
   );
 
+  const hasNoSearchResults = $derived(
+    isSearchWithoutResults(effectiveQuery, sections),
+  );
+
   const frequentMode = $derived<FrequentMode | undefined>(
     activeFilter === "all"
       ? "all"
@@ -194,12 +240,42 @@ import { findInlineCompletion } from "$lib/autocomplete";
 const isMathQuery = $derived(!!evaluateMathExpression(effectiveQuery.trim()));
 
   const frequentItems = $derived(
-    !settings.showFrequent || isMathQuery || !frequentMode
+    !settings.showFrequent || isMathQuery || hasNoSearchResults || !frequentMode
       ? []
       : getFrequentItems(usageEntries, frequentMode, 4),
   );
-
-  const flatItems = $derived([...frequentItems, ...flatResultItems]);
+  const favoriteItems = $derived.by<LauncherItem[]>(() => {
+    if (!settings.showFavorites || isMathQuery || hasNoSearchResults) {
+      return [];
+    }
+
+    const items = getFavoriteItems(favoriteEntries);
+    if (activeFilter === "apps") {
+      return items.filter((item) => item.category === "app");
+    }
+    if (activeFilter === "files") {
+      return items.filter(
+        (item) =>
+          item.category === "file" &&
+          (activeSubcategory === "all" ||
+            classifyFile(item) === activeSubcategory),
+      );
+    }
+    if (activeFilter === "actions") {
+      return [];
+    }
+    return items;
+  });
+
+  const favoriteKeys = $derived(
+    new Set(favoriteEntries.map((entry) => entry.key)),
+  );
+
+  const flatItems = $derived([
+    ...favoriteItems,
+    ...frequentItems,
+    ...flatResultItems,
+  ]);
 
 const inlineCompletion = $derived(
     !settings.inlineAutocomplete
@@ -220,8 +296,10 @@ const inlineCompletion = $derived(
       if (sec.items.length <= remaining) {
         sliced.push(sec);
         remaining -= sec.items.length;
-      } else {
-        sliced.push({
+      } else {
+
+        sliced.push({
+
           ...sec,
           items: sec.items.slice(0, remaining),
         });
@@ -235,6 +313,10 @@ const inlineCompletion = $derived(
   );
   const selectedItem = $derived<LauncherItem | undefined>(
     flatItems[selectedIndex],
+  );
+
+  const selectedActions = $derived<readonly ItemAction[]>(
+    selectedItem ? getItemActions(selectedItem) : [],
   );
   const showResultPreview = $derived(
     Boolean(
@@ -282,34 +364,61 @@ const inlineCompletion = $derived(
   function handleListScroll(): void {
     if (!listContainer || visibleCount >= flatResultItems.length) return;
     const { scrollTop, scrollHeight, clientHeight } = listContainer;
-    if (scrollHeight - scrollTop - clientHeight < 200) {
-      visibleCount = Math.min(
-        flatResultItems.length,
-        visibleCount + getBatchSize(activeFilter),
-      );
-    }
-  }
-
-  $effect(() => {
-    if (windowLabel !== "main") return;
-    const _q = effectiveQuery;
-    const _f = activeFilter;
-    const _s = activeSubcategory;
-    visibleCount = getBatchSize(_f);
-    if (listContainer) {
-      listContainer.scrollTop = 0;
-    }
-  });
-
-  const currentIdleHeight = $derived(
-    getIdleLauncherHeight(settings.informationDensity, settings.layoutDensity),
-  );
-
-  let lastSyncedHeight: number | undefined;
-
-  async function syncWindowHeight(expanded: boolean): Promise<void> {
-    if (windowLabel !== "main") return;
-    if (appMode === "clipboard") return;
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      visibleCount = Math.min(
+
+        flatResultItems.length,
+
+        visibleCount + getBatchSize(activeFilter),
+
+      );
+
+    }
+
+  }
+
+
+
+  $effect(() => {
+
+    if (windowLabel !== "main") return;
+
+    const _q = effectiveQuery;
+
+    const _f = activeFilter;
+
+    const _s = activeSubcategory;
+
+    visibleCount = getBatchSize(_f);
+
+    if (listContainer) {
+
+      listContainer.scrollTop = 0;
+
+    }
+
+  });
+
+
+
+  const currentIdleHeight = $derived(
+
+    getIdleLauncherHeight(settings.informationDensity, settings.layoutDensity),
+
+  );
+
+
+
+  let lastSyncedHeight: number | undefined;
+
+
+
+  async function syncWindowHeight(expanded: boolean): Promise<void> {
+
+    if (windowLabel !== "main") return;
+
+    if (appMode === "clipboard") return;
+
     const targetHeight = expanded ? 500 : currentIdleHeight;
     if (windowExpanded === expanded && lastSyncedHeight === targetHeight) return;
     windowExpanded = expanded;
@@ -386,11 +495,15 @@ const inlineCompletion = $derived(
         searchResponse = resp;
       }
     } catch {
-      // Ignore if Tauri invocation is unavailable
-    } finally {
-      if (seq === opSeq) {
-        isSearching = false;
-        searchBarVisible = false;
+      // Ignore if Tauri invocation is unavailable
+
+    } finally {
+
+      if (seq === opSeq) {
+
+        isSearching = false;
+
+        searchBarVisible = false;
         clearTimeout(searchProgressTimer);
       }
     }
@@ -404,7 +517,9 @@ const inlineCompletion = $derived(
   }
 
   function getInitialSelectedIndex(): number {
-    return effectiveQuery.trim().length > 0 ? frequentItems.length : 0;
+    return effectiveQuery.trim().length > 0
+      ? favoriteItems.length + frequentItems.length
+      : 0;
   }
 
   function setQuery(val: string): void {
@@ -500,11 +615,15 @@ const inlineCompletion = $derived(
     activeFilter = "all";
     activeSubcategory = "all";
     actionsOpen = false;
-    selectedActionIndex = 0;
-    query = restoredQuery;
-    selectedIndex = getInitialSelectedIndex();
-    opSeq++;
-    isSearching = false;
+    selectedActionIndex = 0;
+    query = restoredQuery;
+
+    selectedIndex = getInitialSelectedIndex();
+
+    opSeq++;
+
+    isSearching = false;
+
     searchBarVisible = false;
     searchResponse = undefined;
     if (restoredQuery.trim().length > 0) {
@@ -530,8 +649,62 @@ const inlineCompletion = $derived(
     feedbackTimer = setTimeout(() => {
       feedbackMessage = "";
     }, 1600);
-  }
-
+  }
+
+
+  function isFavoriteItem(item: LauncherItem): boolean {
+    const key = getFavoriteKey(item);
+    return key !== null && favoriteKeys.has(key);
+  }
+
+  function getItemActions(item: LauncherItem): readonly ItemAction[] {
+    if (!getFavoriteKey(item)) {
+      return item.actions;
+    }
+    return [
+      ...item.actions,
+      {
+        label: isFavoriteItem(item)
+          ? "Remove from Favorites"
+          : "Add to Favorites",
+        shortcut: "",
+      },
+    ];
+  }
+
+  async function handleToggleFavorite(item: LauncherItem): Promise<void> {
+    const targetKey = getFavoriteKey(item);
+    if (!targetKey) {
+      return;
+    }
+
+    const selectedKey = selectedItem ? getFavoriteKey(selectedItem) : null;
+    const wasFavorite = favoriteKeys.has(targetKey);
+    favoriteEntries = toggleFavoriteItem(item);
+    say(
+      wasFavorite
+        ? `Removed ${item.name} from Favorites`
+        : `Added ${item.name} to Favorites`,
+    );
+
+    await tick();
+
+    if (selectedKey) {
+      const nextIndex = flatItems.findIndex(
+        (entry) => getFavoriteKey(entry) === selectedKey,
+      );
+      if (nextIndex >= 0) {
+        selectedIndex = nextIndex;
+        return;
+      }
+    }
+
+    selectedIndex = Math.min(
+      selectedIndex,
+      Math.max(0, flatItems.length - 1),
+    );
+  }
+
   async function copyTextToClipboard(text: string): Promise<boolean> {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       try {
@@ -627,7 +800,7 @@ const inlineCompletion = $derived(
         } catch (err) {
           say(`Failed to open browser: ${err}`);
         } finally {
-          setTimeout(() => {
+          setTimeout(() => {
             isLaunching = false;
           }, 300);
         }
@@ -685,10 +858,16 @@ const inlineCompletion = $derived(
       await runSelected();
       return;
     }
-
+    if (
+      action.label === "Add to Favorites" ||
+      action.label === "Remove from Favorites"
+    ) {
+      await handleToggleFavorite(item);
+      return;
+    }
+
     if (item.category === "fb") {
-      if (action.label === "Search the Web") {
-        if (isLaunching) return;
+      if (action.label === "Search the Web") {        if (isLaunching) return;
         isLaunching = true;
         try {
           const url = `https://www.google.com/search?q=${encodeURIComponent(effectiveQuery.trim())}`;
@@ -909,6 +1088,14 @@ const inlineCompletion = $derived(
       return;
     }
 
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      event.target instanceof HTMLElement &&
+      event.target.closest(".fav-toggle")
+    ) {
+      return;
+    }
+
     const count = flatItems.length;
 
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
@@ -919,9 +1106,11 @@ const inlineCompletion = $derived(
       }
       if (event.key === "2") {
         event.preventDefault();
-        toggleFilter("files");
-        return;
-      }
+        toggleFilter("files");
+        return;
+
+      }
+
       if (event.key === "3") {
         event.preventDefault();
         toggleFilter("actions");
@@ -939,39 +1128,68 @@ const inlineCompletion = $derived(
       event.preventDefault();
       event.stopPropagation();
       closeActionsPopover();
-      void copyAndAnnounce(
-        selectedItem.calc.expression,
-        selectedItem.calc.expression,
-      );
+      void copyAndAnnounce(
+        selectedItem.calc.expression,
+
+        selectedItem.calc.expression,
+
+      );
+
       return;
     }
-
-    if (
-      (event.ctrlKey || event.metaKey) &&
-      event.shiftKey &&
-      event.key.toLowerCase() === "c" &&
-      selectedItem?.path
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-      closeActionsPopover();
-      void copyAndAnnounce(selectedItem.path, "Path");
-      return;
-    }
-
-    if (actionsOpen && selectedItem) {
-      const actionCount = selectedItem.actions.length;
-
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (actionCount > 0) {
-          selectedActionIndex = (selectedActionIndex + 1) % actionCount;
-        }
-        return;
-      }
-
-      if (event.key === "ArrowUp") {
+
+
+    if (
+
+      (event.ctrlKey || event.metaKey) &&
+
+      event.shiftKey &&
+
+      event.key.toLowerCase() === "c" &&
+
+      selectedItem?.path
+
+    ) {
+
+      event.preventDefault();
+
+      event.stopPropagation();
+
+      closeActionsPopover();
+
+      void copyAndAnnounce(selectedItem.path, "Path");
+
+      return;
+
+    }
+
+
+
+    if (actionsOpen && selectedItem) {
+
+      const actionCount = selectedActions.length;
+
+
+      if (event.key === "ArrowDown") {
+
+        event.preventDefault();
+
+        event.stopPropagation();
+
+        if (actionCount > 0) {
+
+          selectedActionIndex = (selectedActionIndex + 1) % actionCount;
+
+        }
+
+        return;
+
+      }
+
+
+
+      if (event.key === "ArrowUp") {
+
         event.preventDefault();
         event.stopPropagation();
         if (actionCount > 0) {
@@ -985,7 +1203,7 @@ const inlineCompletion = $derived(
         event.preventDefault();
         event.stopPropagation();
         const chosenAction =
-          selectedItem.actions[selectedActionIndex] ?? selectedItem.actions[0];
+          selectedActions[selectedActionIndex] ?? selectedActions[0];
         void executeItemAction(selectedItem, chosenAction);
         return;
       }
@@ -1018,10 +1236,13 @@ const inlineCompletion = $derived(
       ) {
         event.preventDefault();
         event.stopPropagation();
-        await acceptInlineCompletion();
-        return;
-      }
-    }
+        await acceptInlineCompletion();
+        return;
+
+      }
+
+    }
+
 
     if (
       (event.ctrlKey || event.metaKey) &&
@@ -1035,9 +1256,12 @@ const inlineCompletion = $derived(
       isLaunching = true;
       try {
         await openTargetAsAdmin(selectedItem.path);
-        usageEntries = recordItemUsage(selectedItem);
-        await dismissLauncher();
-      } catch (err) {
+        usageEntries = recordItemUsage(selectedItem);
+
+        await dismissLauncher();
+
+      } catch (err) {
+
         say(`Failed to run as admin: ${err}`);
       } finally {
         setTimeout(() => {
@@ -1063,13 +1287,20 @@ const inlineCompletion = $derived(
         say(`Failed to reveal: ${err}`);
       } finally {
         setTimeout(() => {
-          isLaunching = false;
-        }, 300);
-      }
-      return;
-    }
-
-    if (event.key === "ArrowDown") {
+          isLaunching = false;
+
+        }, 300);
+
+      }
+
+      return;
+
+    }
+
+
+
+    if (event.key === "ArrowDown") {
+
       event.preventDefault();
       hasNavigatedList = true;
       selectedIndex = nav(1);
@@ -1120,7 +1351,7 @@ const inlineCompletion = $derived(
       event.key === "Tab" ||
       ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k")
     ) {
-      event.preventDefault();
+      event.preventDefault();
       openActionsPopover();
       return;
     }
@@ -1130,7 +1361,7 @@ const inlineCompletion = $derived(
       !event.ctrlKey &&
       !event.altKey &&
       !event.metaKey &&
-      (event.key === " " || event.code === "Space")
+      (event.key === " " || event.code === "Space")
     ) {
       if (selectedItem?.path) {
         event.preventDefault();
@@ -1207,7 +1438,7 @@ const inlineCompletion = $derived(
       return;
     }
     selectedActionIndex = index;
-    void executeItemAction(selectedItem, selectedItem.actions[index]);
+    void executeItemAction(selectedItem, selectedActions[index]);
   }
 
   function toggleActionsPopover(): void {
@@ -1472,7 +1703,7 @@ const inlineCompletion = $derived(
   <QuickLookView />
 {:else if appMode === "launcher"}
 <div
-  class="win"
+  class="win"
   id="win"
   class:idle={isIdle}
   class:collapsing={isCollapsing}
@@ -1489,13 +1720,20 @@ const inlineCompletion = $derived(
         onmousedown={preventFocusLossOnMouseDown}
         onclick={returnToAllCategories}
         onkeydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            returnToAllCategories();
-          }
-        }}
-      >
-        <span class="icon-cat" aria-hidden="true">
+          if (e.key === "Enter" || e.key === " ") {
+
+            e.preventDefault();
+
+            returnToAllCategories();
+
+          }
+
+        }}
+
+      >
+
+        <span class="icon-cat" aria-hidden="true">
+
           {#if activeFilter === "apps"}
             <svg
               class="search-icon"
@@ -1767,7 +2005,8 @@ const inlineCompletion = $derived(
           role="tab"
           aria-selected={activeSubcategory === subcat.id}
           tabindex="0"
-          onmousedown={preventFocusLossOnMouseDown}
+          onmousedown={preventFocusLossOnMouseDown}
+
           onclick={() => selectSubcategory(subcat.id)}
         >
           {subcat.label}
@@ -1780,10 +2019,10 @@ const inlineCompletion = $derived(
 
   <div class="body">
     <div id="list" role="listbox" aria-label="Results" bind:this={listContainer} onscroll={handleListScroll}>
-      {#if frequentItems.length > 0}
-        <div class="sec">Frequently used</div>
+      {#if favoriteItems.length > 0}
+        <div class="sec">Favorites</div>
         <div class="grid">
-          {#each frequentItems as item, itemIdx (item.category + ":" + (item.path || item.name))}
+          {#each favoriteItems as item, itemIdx (item.category + ":" + (item.path || item.name))}
             {@const disp = getItemDisplayIcon(item)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
@@ -1820,12 +2059,69 @@ const inlineCompletion = $derived(
                 </div>
               {/if}
               <span class="t">{item.name}</span>
+              <div class="tile-fav">
+                <FavoriteButton
+                  {item}
+                  active={favoriteKeys.has(getFavoriteKey(item) ?? "")}
+                  onToggle={handleToggleFavorite}
+                />
+              </div>
             </div>
           {/each}
         </div>
       {/if}
-      {#if showEmptyState}
-        <div class="empty">
+      {#if frequentItems.length > 0}
+        <div class="sec">Frequently used</div>
+        <div class="grid">
+          {#each frequentItems as item, itemIdx (item.category + ":" + (item.path || item.name))}
+            {@const disp = getItemDisplayIcon(item)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              class="tile row-item"
+              class:on={favoriteItems.length + itemIdx === selectedIndex}
+              data-i={favoriteItems.length + itemIdx}
+              role="option"
+              tabindex="-1"
+              aria-selected={favoriteItems.length + itemIdx === selectedIndex}
+              onmousedown={preventFocusLossOnMouseDown}
+              onmousemove={() => handleRowHover(favoriteItems.length + itemIdx)}
+              onclick={() => handleRowClick(favoriteItems.length + itemIdx)}
+              oncontextmenu={(e) => handleRowContextMenu(e, favoriteItems.length + itemIdx)}
+            >
+              {#if disp.type === "thumb" && disp.src}
+                <img class="thumb" src={disp.src} alt="" />
+              {:else if disp.type === "shell" && disp.src}
+                <img class="ico-img" src={disp.src} alt="" />
+              {:else}
+                <div class="ico g" style={disp.color ? `color: ${disp.color};` : ""}>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d={disp.path ?? getCategoryIconPath(item)} />
+                  </svg>
+                </div>
+              {/if}
+              <span class="t">{item.name}</span>
+              <div class="tile-fav">
+                <FavoriteButton
+                  {item}
+                  active={favoriteKeys.has(getFavoriteKey(item) ?? "")}
+                  onToggle={handleToggleFavorite}
+                />
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if showEmptyState}        <div class="empty">
           <svg
             class="big"
             viewBox="0 0 24 24"
@@ -1919,6 +2215,13 @@ const inlineCompletion = $derived(
                     </svg>
                   </div>
                 {/if}
+                <div class="tile-fav">
+                  <FavoriteButton
+                    {item}
+                    active={favoriteKeys.has(getFavoriteKey(item) ?? "")}
+                    onToggle={handleToggleFavorite}
+                  />
+                </div>
                 <span class="t">
                   {highlighted.before}{#if highlighted.match}<mark
                       >{highlighted.match}</mark
@@ -1945,32 +2248,12 @@ const inlineCompletion = $derived(
                 onclick={() => handleRowClick(itemIndex)}
                 oncontextmenu={(e) => handleRowContextMenu(e, itemIndex)}
               >
-                <div class="a">
-                  <small>{item.calc.expression}</small>
-                  <div class="e">{item.calc.expression}</div>
-                </div>
-                <div class="ar" aria-hidden="true">
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.7"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M5 12h14M13 6l6 6-6 6" />
-                  </svg>
-                </div>
-                <div class="b">
-                  <small>{item.calc.label}</small>
-                  <div class="v">
-                    {#if item.calc.colorPreview}
-                      <span class="color-preview-chip" style:background-color={item.calc.colorPreview} aria-hidden="true"></span>
-                    {/if}{item.calc.value}
-                  </div>
-                </div>
+                <QuickAnswerResult
+                  calc={item.calc}
+                  details={getIntegerQuickAnswerDetails(item.calc)}
+                  selected={isSelected}
+                />
+
               </div>
             {:else}
               {@const highlighted = splitHighlight(item.name, query)}
@@ -2021,6 +2304,19 @@ const inlineCompletion = $derived(
                   {#if item.subtitle && item.subtitle.trim().toLowerCase() !== "application" && item.subtitle.trim().toLowerCase() !== item.rightLabel?.trim().toLowerCase()}<span class="s">{item.subtitle}</span>{/if}
                 </div>
                 <span class="r">{item.rightLabel}</span>
+                {#if getFavoriteKey(item)}
+
+                  <FavoriteButton
+
+                    {item}
+
+                    active={favoriteKeys.has(getFavoriteKey(item) ?? "")}
+
+                    onToggle={handleToggleFavorite}
+
+                  />
+
+                {/if}
               </div>
             {/if}
           {/each}
@@ -2123,7 +2419,7 @@ const inlineCompletion = $derived(
   <div class="pop" id="pop" class:open={actionsOpen && selectedItem !== undefined}>
     {#if selectedItem}
       <h6>{selectedItem.name.slice(0, 34)}</h6>
-      {#each selectedItem.actions as action, actionIndex (action.label)}
+      {#each selectedActions as action, actionIndex (action.label)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="row"
@@ -2143,7 +2439,7 @@ const inlineCompletion = $derived(
             {/each}
           </span>
         </div>
-        {#if actionIndex === 0 && selectedItem.actions.length > 1}
+        {#if actionIndex === 0 && selectedActions.length > 1}
           <div class="hs" aria-hidden="true"></div>
         {/if}
       {/each}
@@ -2812,6 +3108,7 @@ const inlineCompletion = $derived(
   }
 
   .tile {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -2844,7 +3141,19 @@ const inlineCompletion = $derived(
     width: 60px;
     height: 44px;
     border-radius: 7px;
-    object-fit: cover;
+    object-fit: cover;
+  }
+
+
+
+  .tile-fav {
+
+    position: absolute;
+
+    top: 4px;
+
+    right: 4px;
+
   }
 
   .tile .t {
@@ -2940,64 +3249,6 @@ const inlineCompletion = $derived(
     font-weight: 600;
   }
 
-  .calc {
-    display: flex;
-    align-items: center;
-    margin: 2px 0 4px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    background: var(--sel);
-  }
-
-  .calc .a,
-  .calc .b {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .calc small {
-    display: block;
-    color: var(--dim);
-    font-size: 11.5px;
-    margin-bottom: 3px;
-  }
-
-  .color-preview-chip {
-    display: inline-block;
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    margin-right: 8px;
-    vertical-align: middle;
-    border: 1px solid var(--line);
-    flex-shrink: 0;
-  }
-
-  .calc .v {
-    font-size: 26px;
-    font-weight: 500;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .calc .e {
-    font-size: 17px;
-    color: var(--mut);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .calc .ar {
-    color: var(--dim);
-    padding: 0 14px;
-  }
-
-  .calc .b {
-    text-align: right;
-  }
 
   .empty {
     padding: 34px 16px 30px;

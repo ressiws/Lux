@@ -870,3 +870,13 @@ export function hasOnlyFallbackSections(
     sections.every((section) => section.category === "fb")
   );
 }
+
+export function isSearchWithoutResults(
+  rawQuery: string,
+  sections: readonly LauncherSection[],
+): boolean {
+  return (
+    rawQuery.trim().length > 0 &&
+    (sections.length === 0 || hasOnlyFallbackSections(sections))
+  );
+}
