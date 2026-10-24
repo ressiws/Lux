@@ -1,32 +1,32 @@
 {
-  "name": "lux",
-  "version": "0.1.0-beta.3",
-  "description": "",
-  "type": "module",
-  "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
-    "preview": "vite preview",
-    "prepare": "svelte-kit sync || echo ''",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "test": "tsx src/lib/calculator.test.ts && tsx src/lib/search.test.ts && tsx src/lib/classification.test.ts && tsx src/lib/prefix.test.ts && tsx src/lib/settings.test.ts && tsx src/lib/color.test.ts && tsx src/lib/windowDrag.test.ts && tsx src/lib/confirmDialog.test.ts",
-    "tauri": "tauri"
-  },
-  "license": "MIT",
-  "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
-  },
-  "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.65.1",
-    "@sveltejs/vite-plugin-svelte": "^7.1.2",
-    "svelte": "^5.56.3",
-    "svelte-check": "^4.6.0",
-    "tsx": "^4.23.15",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.16",
-    "@tauri-apps/cli": "^2"
-  }
+	"name": "lux",
+	"version": "0.1.0-beta.4",
+	"description": "",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "tsx src/lib/calculator.test.ts && tsx src/lib/search.test.ts && tsx src/lib/classification.test.ts && tsx src/lib/prefix.test.ts && tsx src/lib/settings.test.ts && tsx src/lib/color.test.ts && tsx src/lib/windowDrag.test.ts && tsx src/lib/confirmDialog.test.ts",
+		"tauri": "tauri"
+	},
+	"license": "MIT",
+	"dependencies": {
+		"@tauri-apps/api": "^2",
+		"@tauri-apps/plugin-opener": "^2"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.65.1",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"svelte": "^5.56.3",
+		"svelte-check": "^4.6.0",
+		"tsx": "^4.23.15",
+		"typescript": "~6.0.3",
+		"vite": "^8.0.16",
+		"@tauri-apps/cli": "^2"
+	}
 }
