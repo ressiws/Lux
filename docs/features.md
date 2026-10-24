@@ -24,6 +24,8 @@ Welcome to **Lux**, a lightweight, fast, and privacy-first desktop launcher for 
 Lux indexes your installed system applications directly from Windows Start Menu directories, system paths, and standard locations.
 
 - **Fast Launching**: Type the application name (e.g., `Firefox`, `Calculator`, `Settings`, `Terminal`) and press <kbd>Enter</kbd>.
+- **Abbreviations**: Word-initial abbreviations work automatically, so `vsc` finds Visual Studio Code while exact names keep their higher ranking.
+- **Result Types**: Results are labeled from their source metadata as `Application`, `System Setting`, `File`, or `Folder`, so settings pages such as Control Panel are not shown as applications.
 - **Run as Administrator**: Highlight an application and press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd> (or select "Run as Administrator" from the Actions menu with <kbd>Ctrl</kbd> + <kbd>K</kbd>).
 - **Open File Location**: Highlight an application and press <kbd>Ctrl</kbd> + <kbd>O</kbd> to reveal the shortcut or executable in Windows Explorer.
 - **Flow Launcher Prefix Support**: If enabled in Settings, prefixes such as `>` or `et` can be configured or ignored according to your workflow preferences.

@@ -100,6 +100,23 @@ pub struct SearchResultItem {
     pub version: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppKind {
+    #[default]
+    Application,
+    SystemSetting,
+}
+
+impl AppKind {
+    pub fn right_label(self) -> &'static str {
+        match self {
+            Self::Application => "Application",
+            Self::SystemSetting => "System Setting",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedApp {
     pub name: String,
@@ -112,6 +129,8 @@ pub struct IndexedApp {
     pub keywords: String,
     pub size: Option<String>,
     pub version: Option<String>,
+    #[serde(default)]
+    pub kind: AppKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,7 +146,7 @@ pub struct IndexedFile {
     pub icon: Option<String>,
 }
 
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const SEARCH_INDEX_FILE: &str = "search_index.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -987,6 +1006,107 @@ pub fn should_exclude_app_name(name: &str) -> bool {
         .any(|pattern| lower.contains(pattern))
 }
 
+/// Classifies a Windows shortcut from its resolved target and source location.
+/// Display names alone never turn a regular application into a system setting.
+pub fn classify_windows_app(shortcut: &Path, name: &str, location: &str) -> AppKind {
+    let location_low = location.to_lowercase();
+    let extension = Path::new(location)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if matches!(
+        extension.as_str(),
+        "msc" | "cpl" | "settingcontent-ms"
+    ) {
+        return AppKind::SystemSetting;
+    }
+
+    let target_name = Path::new(location)
+        .file_name()
+        .and_then(|file| file.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if target_name == "systemsettings.exe"
+        || target_name == "control.exe"
+        || location_low.contains("\\immersivecontrolpanel\\")
+        || location_low.starts_with("ms-settings:")
+    {
+        return AppKind::SystemSetting;
+    }
+
+    // Shell virtual folders such as Control Panel have no filesystem target.
+    // Restrict the fallback to the Windows System Tools menu so an ordinary
+    // application that happens to share the name is not reclassified.
+    if name.eq_ignore_ascii_case("control panel") {
+        let shortcut_normalized = shortcut.to_string_lossy().replace('\\', "/").to_lowercase();
+        if shortcut_normalized.contains("/microsoft/windows/start menu/programs/system tools/") {
+            return AppKind::SystemSetting;
+        }
+    }
+
+    AppKind::Application
+}
+
+/// Classifies a Linux desktop entry from its declared categories and Exec command.
+pub fn classify_linux_app(
+    categories: Option<&str>,
+    exec: Option<&str>,
+    has_settings_panel: bool,
+) -> AppKind {
+    if has_settings_panel {
+        return AppKind::SystemSetting;
+    }
+
+    if let Some(categories) = categories {
+        for category in categories.split(';') {
+            let category = category.trim();
+            if category.eq_ignore_ascii_case("Settings")
+                || category.eq_ignore_ascii_case("X-GNOME-Settings-Panel")
+            {
+                return AppKind::SystemSetting;
+            }
+        }
+    }
+
+    if let Some(exec) = exec {
+        let program = exec
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_lowercase();
+        let program_name = Path::new(&program)
+            .file_name()
+            .and_then(|file| file.to_str())
+            .unwrap_or("");
+
+        if matches!(
+            program_name,
+            "gnome-control-center"
+                | "systemsettings"
+                | "systemsettings5"
+                | "systemsettings6"
+                | "kcmshell5"
+                | "kcmshell6"
+                | "xfce4-settings-manager"
+                | "mate-control-center"
+                | "cinnamon-settings"
+                | "budgie-control-center"
+                | "lxqt-config"
+                | "unity-control-center"
+                | "deepin-control-center"
+                | "pantheon-control-center"
+        ) {
+            return AppKind::SystemSetting;
+        }
+    }
+
+    AppKind::Application
+}
+
 pub fn score_match(name: &str, keywords: &str, query: &str) -> u32 {
     let name_low = name.to_lowercase();
     let query_low = query.to_lowercase();
@@ -1017,12 +1137,33 @@ pub fn score_match(name: &str, keywords: &str, query: &str) -> u32 {
     0
 }
 
+fn score_app_abbreviation(app_name: &str, query: &str) -> u32 {
+    let query_low = query.trim().to_lowercase();
+    if query_low.len() < 3 || !query_low.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return 0;
+    }
+
+    let initials: String = app_name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| word.chars().next())
+        .collect();
+
+    if initials.len() >= query_low.len() && initials.starts_with(&query_low) {
+        70
+    } else {
+        0
+    }
+}
+
 pub fn score_app_alias(app_name: &str, query: &str) -> u32 {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return 0;
     }
     let name_low = app_name.to_lowercase();
+    let abbreviation_score = score_app_abbreviation(app_name, &q);
 
     // Check prefix expansions like "vs 2022" or "vscode insiders"
     if let Some(rest) = q.strip_prefix("vs ") {
@@ -1056,7 +1197,7 @@ pub fn score_app_alias(app_name: &str, query: &str) -> u32 {
         }
     }
 
-    match q.as_str() {
+    let alias_score = match q.as_str() {
         "vs" => {
             if name_low.contains("visual studio") {
                 if name_low.contains("code") {
@@ -1101,7 +1242,9 @@ pub fn score_app_alias(app_name: &str, query: &str) -> u32 {
         }
         "calc" if name_low.contains("calculator") => 85,
         _ => 0,
-    }
+    };
+
+    alias_score.max(abbreviation_score)
 }
 
 fn walk_directory_files(
@@ -1494,8 +1637,9 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
                 let norm_name = stem.to_lowercase();
                 if seen_names.insert(norm_name) {
                     let color = assign_app_color(&stem);
-                    let subtitle = "Application".to_string();
                     let (icon, location, size, version) = resolve_app_metadata(&path, None, None);
+                    let kind = classify_windows_app(&path, &stem, &location);
+                    let subtitle = kind.right_label().to_string();
                     apps.push(IndexedApp {
                         name: stem,
                         subtitle,
@@ -1507,6 +1651,7 @@ fn scan_windows_start_menu_apps() -> Vec<IndexedApp> {
                         keywords: String::new(),
                         size,
                         version,
+                        kind,
                     });
                 }
             }
@@ -1583,6 +1728,8 @@ fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
     let mut comment: Option<String> = None;
     let mut exec: Option<String> = None;
     let mut icon: Option<String> = None;
+    let mut categories: Option<String> = None;
+    let mut has_settings_panel = false;
     let mut is_app = false;
     let mut no_display = false;
     let mut hidden = false;
@@ -1607,6 +1754,8 @@ fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
                 "GenericName" if comment.is_none() => comment = Some(value.to_string()),
                 "Exec" if exec.is_none() => exec = Some(value.to_string()),
                 "Icon" if icon.is_none() => icon = Some(value.to_string()),
+                "Categories" if categories.is_none() => categories = Some(value.to_string()),
+                "X-GNOME-Settings-Panel" => has_settings_panel = true,
                 "NoDisplay" => no_display = value.eq_ignore_ascii_case("true"),
                 "Hidden" => hidden = value.eq_ignore_ascii_case("true"),
                 _ => {}
@@ -1620,7 +1769,8 @@ fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
 
     let app_name = name?;
     let color = assign_app_color(&app_name);
-    let subtitle = comment.unwrap_or_else(|| "Application".to_string());
+    let kind = classify_linux_app(categories.as_deref(), exec.as_deref(), has_settings_panel);
+    let subtitle = comment.unwrap_or_else(|| kind.right_label().to_string());
     let (resolved_icon, location, size, version) =
         resolve_app_metadata(path, exec.as_deref(), icon.as_deref());
 
@@ -1635,6 +1785,7 @@ fn parse_desktop_entry(path: &Path, content: &str) -> Option<IndexedApp> {
         keywords: String::new(),
         size,
         version,
+        kind,
     })
 }
 
@@ -1748,7 +1899,7 @@ fn build_app_search_result(app: &IndexedApp) -> SearchResultItem {
         thumbnail: None,
         color: Some(app.color.clone()),
         is_image: false,
-        right_label: "Application".to_string(),
+        right_label: app.kind.right_label().to_string(),
         size: app.size.clone(),
         version: app.version.clone(),
     }
@@ -2399,6 +2550,121 @@ mod tests {
     }
 
     #[test]
+    fn test_system_setting_classification_from_metadata() {
+        let system_tools_shortcut = Path::new(
+            r"C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\System Tools\Control Panel.lnk",
+        );
+
+        assert_eq!(
+            classify_windows_app(
+                Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Administrative Tools\Firewall.lnk"),
+                "Windows Defender Firewall with Advanced Security",
+                r"C:\Windows\System32\WF.msc",
+            ),
+            AppKind::SystemSetting,
+            "Management console targets are system settings"
+        );
+        assert_eq!(
+            classify_windows_app(
+                Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Accessibility\Mouse.lnk"),
+                "Mouse",
+                r"C:\Windows\System32\main.cpl",
+            ),
+            AppKind::SystemSetting,
+            "Control Panel applets are system settings"
+        );
+        assert_eq!(
+            classify_windows_app(
+                Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Settings.lnk"),
+                "Settings",
+                r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+            ),
+            AppKind::SystemSetting,
+            "The Windows Settings executable is a system setting"
+        );
+        assert_eq!(
+            classify_windows_app(system_tools_shortcut, "Control Panel", system_tools_shortcut.to_string_lossy().as_ref()),
+            AppKind::SystemSetting,
+            "Shell virtual folder shortcuts in System Tools are system settings"
+        );
+
+        // A matching display name alone must not reclassify an ordinary app.
+        assert_eq!(
+            classify_windows_app(
+                Path::new(r"C:\Users\tester\Desktop\Control Panel.lnk"),
+                "Control Panel",
+                r"C:\Apps\control-panel.exe",
+            ),
+            AppKind::Application,
+            "An ordinary app named Control Panel stays an application"
+        );
+        assert_eq!(
+            classify_windows_app(
+                Path::new(r"C:\Users\tester\Desktop\Settings.lnk"),
+                "Settings",
+                r"C:\Apps\settings.exe",
+            ),
+            AppKind::Application,
+            "An ordinary app named Settings stays an application"
+        );
+    }
+
+    #[test]
+    fn test_linux_system_setting_classification_from_metadata() {
+        assert_eq!(
+            classify_linux_app(Some("Settings;X-GNOME-Settings-Panel;"), Some("gnome-control-center wifi"), false),
+            AppKind::SystemSetting,
+            "GNOME settings panels are system settings"
+        );
+        assert_eq!(
+            classify_linux_app(Some("System;Settings;"), Some("/usr/bin/gnome-control-center"), false),
+            AppKind::SystemSetting,
+            "The Settings category and control center executable are system settings"
+        );
+        assert_eq!(
+            classify_linux_app(Some("Qt;KDE;Settings;"), Some("systemsettings"), false),
+            AppKind::SystemSetting,
+            "KDE system settings are system settings"
+        );
+        assert_eq!(
+            classify_linux_app(Some("Network;"), Some("firefox %u"), false),
+            AppKind::Application,
+            "A regular desktop application is not a system setting"
+        );
+        assert_eq!(
+            classify_linux_app(None, Some("firefox %u"), false),
+            AppKind::Application,
+            "Unknown metadata falls back to application"
+        );
+    }
+
+    #[test]
+    fn test_setting_results_use_system_setting_label() {
+        let setting = IndexedApp {
+            name: "Control Panel".to_string(),
+            subtitle: "System Setting".to_string(),
+            path: PathBuf::from(r"C:\Control Panel.lnk"),
+            location: String::new(),
+            exec: None,
+            icon: None,
+            color: "#4a8fd8".to_string(),
+            keywords: String::new(),
+            size: None,
+            version: None,
+            kind: AppKind::SystemSetting,
+        };
+        let result = build_app_search_result(&setting);
+        assert_eq!(result.category, "app");
+        assert_eq!(result.right_label, "System Setting");
+
+        let app = IndexedApp {
+            kind: AppKind::Application,
+            ..setting
+        };
+        assert_eq!(build_app_search_result(&app).right_label, "Application");
+    }
+
+    #[test]
     fn test_score_match() {
         assert_eq!(score_match("Discord", "", "Discord"), 100);
         assert_eq!(score_match("Discord", "", "disc"), 80);
@@ -2424,6 +2690,7 @@ mod tests {
                     keywords: "browser web".to_string(),
                     size: Some("120 MB".to_string()),
                     version: Some("130.0.0".to_string()),
+                    kind: AppKind::Application,
                 },
                 IndexedApp {
                     name: "Discord".to_string(),
@@ -2436,6 +2703,7 @@ mod tests {
                     keywords: "chat voice".to_string(),
                     size: Some("85 MB".to_string()),
                     version: Some("1.0.9".to_string()),
+                    kind: AppKind::Application,
                 },
             ],
             files: vec![
@@ -2539,6 +2807,7 @@ mod tests {
             keywords: String::new(),
             size: None,
             version: None,
+            kind: AppKind::Application,
         };
 
         let index = SearchIndex {
@@ -2583,6 +2852,21 @@ mod tests {
         assert_eq!(vscode_apps_upper.len(), 1);
         assert_eq!(vscode_apps_upper[0].name, "Visual Studio Code");
 
+        // 3b. Word-initial abbreviation finds Visual Studio Code without
+        // matching unrelated applications or adding aliases for every app.
+        let (vsc_apps, _) = search_index(&index, "vsc");
+        assert_eq!(vsc_apps.len(), 1);
+        assert_eq!(vsc_apps[0].name, "Visual Studio Code");
+
+        let (vsc_apps_upper, _) = search_index(&index, "VSC");
+        assert_eq!(vsc_apps_upper.len(), 1);
+        assert_eq!(vsc_apps_upper[0].name, "Visual Studio Code");
+
+        // Two-letter abbreviations do not trigger broad acronym matching.
+        let (short_apps, _) = search_index(&index, "vs");
+        assert!(short_apps.len() <= 2);
+        assert!(short_apps.iter().all(|app| app.name.contains("Visual Studio")));
+
         // 4. "cmd" matches Command Prompt
         let (cmd_apps, _) = search_index(&index, "cmd");
         assert_eq!(cmd_apps.len(), 1);
@@ -2607,6 +2891,7 @@ mod tests {
                 keywords: String::new(),
                 size: None,
                 version: None,
+                kind: AppKind::Application,
             }],
             files: vec![
                 IndexedFile {
@@ -2751,6 +3036,7 @@ mod tests {
                 keywords: String::new(),
                 size: None,
                 version: None,
+                kind: AppKind::Application,
             }],
             files: vec![IndexedFile {
                 name: "notes.txt".to_string(),
@@ -2836,6 +3122,7 @@ mod tests {
                 keywords: String::new(),
                 size: None,
                 version: None,
+                kind: AppKind::Application,
             });
             lock.is_indexed = true;
         }

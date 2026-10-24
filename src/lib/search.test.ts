@@ -3,6 +3,7 @@ import {
   MOCK_ITEMS,
   buildSections,
   getCategoryPlaceholder,
+  getItemDisplayIcon,
   getItemMetadata,
   hasOnlyFallbackSections,
   mapBackendApp,
@@ -41,6 +42,22 @@ export function runSearchIntegrationTests(): number {
     rightLabel: "Application",
     size: "120 MB",
     version: "1.0.9000",
+  };
+
+  const sampleSetting: SearchResultItem = {
+    id: "app:Control Panel.lnk",
+    category: "app",
+    name: "Control Panel",
+    subtitle: "System Setting",
+    path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\Control Panel.lnk",
+    location: "",
+    icon: null,
+    thumbnail: null,
+    color: null,
+    isImage: false,
+    rightLabel: "System Setting",
+    size: null,
+    version: null,
   };
 
   const sampleImage: SearchResultItem = {
@@ -84,6 +101,31 @@ export function runSearchIntegrationTests(): number {
     assertEqual(mappedApp.actions[0].label, "Open Application", "Primary action");
     assertEqual(mappedApp.actions[1].label, "Reveal in Folder", "Reveal action");
     assertEqual(mappedApp.actions[3].label, "Run as Administrator", "Admin action");
+  });
+
+  check(() => {
+    const mappedSetting = mapBackendApp(sampleSetting);
+    assertEqual(mappedSetting.category, "app", "System setting stays in app results");
+    assertEqual(mappedSetting.rightLabel, "System Setting", "System setting label");
+    assertEqual(mappedSetting.primaryLabel, "Open System Setting", "System setting primary label");
+    assertEqual(mappedSetting.actions[0].label, "Open System Setting", "System setting primary action");
+
+    const settingMeta = getItemMetadata(mappedSetting);
+    assertEqual(settingMeta[0][1], "System Setting", "System setting preview kind");
+
+    const settingIcon = getItemDisplayIcon(mappedSetting);
+    assertEqual(settingIcon.type, "format", "System setting fallback icon");
+    assertEqual(settingIcon.path, "M4 7h8 M16 7h4 M4 17h4 M12 17h8 M12 4v6 M8 14v6", "System setting icon path");
+  });
+
+  check(() => {
+    const ordinarySettingsApp = mapBackendApp({
+      ...sampleSetting,
+      name: "Settings",
+      rightLabel: "Application",
+    });
+    assertEqual(ordinarySettingsApp.rightLabel, "Application", "Regular app label is preserved");
+    assertEqual(ordinarySettingsApp.primaryLabel, "Open Application", "Regular app primary label");
   });
 
   check(() => {
@@ -211,6 +253,31 @@ export function runSearchIntegrationTests(): number {
     const item = mapBackendApp(sampleApp);
     assertEqual(scoreItem(item, "disc") > 0, true, "Prefix match score > 0");
     assertEqual(scoreItem(item, "xyz"), 0, "No match score is 0");
+  });
+
+  // 7b. Word-initial abbreviations match application names
+  check(() => {
+    const vscode = mapBackendApp({
+      ...sampleApp,
+      id: "app:vscode",
+      name: "Visual Studio Code",
+      path: "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+      rightLabel: "Application",
+    });
+    assertEqual(scoreItem(vscode, "vsc") > 0, true, "vsc abbreviation matches Visual Studio Code");
+    assertEqual(
+      scoreItem(vscode, "visual studio code") > scoreItem(vscode, "vsc"),
+      true,
+      "Exact name rank stays above abbreviation rank",
+    );
+    assertEqual(scoreItem(vscode, "vs"), 0, "Two-letter queries do not broad-match initials");
+    assertEqual(scoreItem(mapBackendApp(sampleApp), "vsc"), 0, "Unrelated app does not match vsc");
+
+    const sections = buildSections("vsc", undefined, {
+      filter: "apps",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(sections[0]?.items[0]?.name, "Visual Studio Code", "vsc finds Visual Studio Code");
   });
 
   // 8. Test enableFileSearch option
