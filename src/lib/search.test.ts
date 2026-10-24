@@ -3,8 +3,10 @@ import {
   MOCK_ITEMS,
   buildSections,
   getCategoryPlaceholder,
+  getItemDisplayIcon,
   getItemMetadata,
   hasOnlyFallbackSections,
+  isSearchWithoutResults,
   mapBackendApp,
   mapBackendFile,
   scoreItem,
@@ -41,6 +43,22 @@ export function runSearchIntegrationTests(): number {
     rightLabel: "Application",
     size: "120 MB",
     version: "1.0.9000",
+  };
+
+  const sampleSetting: SearchResultItem = {
+    id: "app:Control Panel.lnk",
+    category: "app",
+    name: "Control Panel",
+    subtitle: "System Setting",
+    path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\Control Panel.lnk",
+    location: "",
+    icon: null,
+    thumbnail: null,
+    color: null,
+    isImage: false,
+    rightLabel: "System Setting",
+    size: null,
+    version: null,
   };
 
   const sampleImage: SearchResultItem = {
@@ -84,6 +102,31 @@ export function runSearchIntegrationTests(): number {
     assertEqual(mappedApp.actions[0].label, "Open Application", "Primary action");
     assertEqual(mappedApp.actions[1].label, "Reveal in Folder", "Reveal action");
     assertEqual(mappedApp.actions[3].label, "Run as Administrator", "Admin action");
+  });
+
+  check(() => {
+    const mappedSetting = mapBackendApp(sampleSetting);
+    assertEqual(mappedSetting.category, "app", "System setting stays in app results");
+    assertEqual(mappedSetting.rightLabel, "System Setting", "System setting label");
+    assertEqual(mappedSetting.primaryLabel, "Open System Setting", "System setting primary label");
+    assertEqual(mappedSetting.actions[0].label, "Open System Setting", "System setting primary action");
+
+    const settingMeta = getItemMetadata(mappedSetting);
+    assertEqual(settingMeta[0][1], "System Setting", "System setting preview kind");
+
+    const settingIcon = getItemDisplayIcon(mappedSetting);
+    assertEqual(settingIcon.type, "format", "System setting fallback icon");
+    assertEqual(settingIcon.path, "M4 7h8 M16 7h4 M4 17h4 M12 17h8 M12 4v6 M8 14v6", "System setting icon path");
+  });
+
+  check(() => {
+    const ordinarySettingsApp = mapBackendApp({
+      ...sampleSetting,
+      name: "Settings",
+      rightLabel: "Application",
+    });
+    assertEqual(ordinarySettingsApp.rightLabel, "Application", "Regular app label is preserved");
+    assertEqual(ordinarySettingsApp.primaryLabel, "Open Application", "Regular app primary label");
   });
 
   check(() => {
@@ -211,6 +254,31 @@ export function runSearchIntegrationTests(): number {
     const item = mapBackendApp(sampleApp);
     assertEqual(scoreItem(item, "disc") > 0, true, "Prefix match score > 0");
     assertEqual(scoreItem(item, "xyz"), 0, "No match score is 0");
+  });
+
+  // 7b. Word-initial abbreviations match application names
+  check(() => {
+    const vscode = mapBackendApp({
+      ...sampleApp,
+      id: "app:vscode",
+      name: "Visual Studio Code",
+      path: "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+      rightLabel: "Application",
+    });
+    assertEqual(scoreItem(vscode, "vsc") > 0, true, "vsc abbreviation matches Visual Studio Code");
+    assertEqual(
+      scoreItem(vscode, "visual studio code") > scoreItem(vscode, "vsc"),
+      true,
+      "Exact name rank stays above abbreviation rank",
+    );
+    assertEqual(scoreItem(vscode, "vs"), 0, "Two-letter queries do not broad-match initials");
+    assertEqual(scoreItem(mapBackendApp(sampleApp), "vsc"), 0, "Unrelated app does not match vsc");
+
+    const sections = buildSections("vsc", undefined, {
+      filter: "apps",
+      mockItemsForTesting: MOCK_ITEMS,
+    });
+    assertEqual(sections[0]?.items[0]?.name, "Visual Studio Code", "vsc finds Visual Studio Code");
   });
 
   // 8. Test enableFileSearch option
@@ -648,6 +716,97 @@ export function runSearchIntegrationTests(): number {
       "missing prefixes have no completion",
     );
   });
+
+    // 27. Test math query suppresses apps/files/commands sections
+    check(() => {
+      const mockResponse: SearchResponse = {
+        apps: [sampleApp],
+        files: [sampleDoc],
+      };
+      const sections = buildSections("15 * 4", mockResponse, { filter: "all" });
+      assertEqual(sections.length, 1, "Only calc section for math query");
+      assertEqual(sections[0].category, "calc", "First section is calc");
+      assertEqual(sections[0].items[0].name, "60", "Calculated value");
+      const hasApps = sections.some((s) => s.category === "app");
+      const hasFiles = sections.some((s) => s.category === "file");
+      const hasCmds = sections.some((s) => s.category === "cmd");
+      assertEqual(hasApps, false, "No apps section for math query");
+      assertEqual(hasFiles, false, "No files section for math query");
+      assertEqual(hasCmds, false, "No commands section for math query");
+    });
+
+    // 28. Test math query with test items also suppresses other sections
+    check(() => {
+      const sections = buildSections("2 + 2", undefined, {
+        filter: "all",
+        mockItemsForTesting: MOCK_ITEMS,
+      });
+      assertEqual(sections.length, 1, "Only calc section for math query with test items");
+      assertEqual(sections[0].category, "calc", "First section is calc");
+    });
+
+    // 29. Test non-math query still shows all sections
+    check(() => {
+      const mockResponse: SearchResponse = {
+        apps: [sampleApp],
+        files: [sampleDoc],
+      };
+      const sections = buildSections("discord", mockResponse, { filter: "all" });
+      const hasCalc = sections.some((s) => s.category === "calc");
+      const hasApps = sections.some((s) => s.category === "app");
+      const hasFiles = sections.some((s) => s.category === "file");
+      assertEqual(hasCalc, false, "No calc section for non-math query");
+      assertEqual(hasApps, true, "Apps section present for non-math query");
+      assertEqual(hasFiles, true, "Files section present for non-math query");
+    });
+
+    // 30. Test inline autocomplete function works (setting checked in UI layer)
+    check(() => {
+      const items = [
+        mapBackendApp(sampleApp),
+        mapBackendFile(sampleDoc),
+      ];
+      const completion = findInlineCompletion("dis", items);
+      assertEqual(completion?.completion, "cord", "autocomplete function works");
+    });
+
+    // 31. Test non-empty query with only fallback sections is treated as no results
+    check(() => {
+      const sections = buildSections(
+        "no-such-item-xyz",
+        { apps: [], files: [] },
+        { filter: "all" },
+      );
+      assertEqual(
+        isSearchWithoutResults("no-such-item-xyz", sections),
+        true,
+        "Fallback-only search is treated as no results",
+      );
+    });
+
+    // 32. Test non-empty query with actual results is not treated as no results
+    check(() => {
+      const sections = buildSections(
+        "discord",
+        { apps: [sampleApp], files: [] },
+        { filter: "all" },
+      );
+      assertEqual(
+        isSearchWithoutResults("discord", sections),
+        false,
+        "Search with matching results remains visible",
+      );
+    });
+
+    // 33. Test empty query preserves existing home-section behavior
+    check(() => {
+      const sections = buildSections("", { apps: [], files: [] }, { filter: "all" });
+      assertEqual(
+        isSearchWithoutResults("", sections),
+        false,
+        "Empty query is not treated as a no-results search",
+      );
+    });
 
   return passed;
 }

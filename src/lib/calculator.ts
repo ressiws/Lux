@@ -1,4 +1,4 @@
-import type { CalcPreview } from "./types";
+import type { CalcPreview, QuickAnswerDetail } from "./types";
 
 // ============================================================================
 // 1. CURRENCY CONVERSION & RATES CACHING
@@ -1524,6 +1524,34 @@ class ExpressionParser {
 export function formatCalculatorNumber(value: number): string {
   const normalized = Object.is(value, -0) ? 0 : value;
   return String(Number(normalized.toFixed(8)));
+}
+
+export function getIntegerQuickAnswerDetails(
+  calc: CalcPreview,
+): QuickAnswerDetail[] {
+  if (
+    calc.categoryLabel !== "Calculator" &&
+    calc.categoryLabel !== "Calculation"
+  ) {
+    return [];
+  }
+
+  const raw = calc.raw.trim();
+  if (!/^-?\d+$/.test(raw)) {
+    return [];
+  }
+
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    return [];
+  }
+
+  const sign = value < 0 ? "-" : "";
+  const absolute = Math.abs(value);
+  return [
+    { label: "Hex", value: `${sign}0x${absolute.toString(16)}` },
+    { label: "Binary", value: `${sign}${absolute.toString(2)}` },
+  ];
 }
 
 // ============================================================================

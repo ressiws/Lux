@@ -36,6 +36,8 @@ export function getFileThumbnail(
 }
 
 export function mapBackendApp(app: SearchResultItem): LauncherItem {
+  const rightLabel = app.rightLabel.trim() || "Application";
+  const primaryLabel = `Open ${rightLabel}`;
   return {
     category: "app",
     name: app.name,
@@ -47,10 +49,10 @@ export function mapBackendApp(app: SearchResultItem): LauncherItem {
     size: app.size ?? undefined,
     version: app.version ?? undefined,
     keywords: "",
-    rightLabel: "Application",
-    primaryLabel: "Open Application",
+    rightLabel,
+    primaryLabel,
     actions: [
-      { label: "Open Application", shortcut: "↵" },
+      { label: primaryLabel, shortcut: "↵" },
       { label: "Reveal in Folder", shortcut: "Ctrl ↵" },
       { label: "Copy Path", shortcut: "Ctrl ⇧ C" },
       { label: "Run as Administrator", shortcut: "Ctrl ⇧ ↵" },
@@ -356,6 +358,7 @@ export const SECTION_TITLES: Readonly<Record<ItemCategory, string>> = {
 
 export const CATEGORY_ICONS: Readonly<Record<string, string>> = {
   file: "M7 3h7l4 4v14H7z M14 3v4h4",
+  setting: "M4 7h8 M16 7h4 M4 17h4 M12 17h8 M12 4v6 M8 14v6",
   folder: "M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z",
   image:
     "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M21 15l-5-5L5 21",
@@ -416,9 +419,13 @@ export interface ItemDisplayIcon {
 
 export function getItemDisplayIcon(item: LauncherItem): ItemDisplayIcon {
   if (item.category === "app") {
-    return item.icon
-      ? { type: "shell", src: item.icon }
-      : { type: "format", path: "M3 3h18v18H3z M3 9h18M9 21V9", color: "#4a8fd8" };
+    if (item.icon) {
+      return { type: "shell", src: item.icon };
+    }
+    if (item.rightLabel === "System Setting") {
+      return { type: "format", path: CATEGORY_ICONS.setting, color: "#4a8fd8" };
+    }
+    return { type: "format", path: "M3 3h18v18H3z M3 9h18M9 21V9", color: "#4a8fd8" };
   }
 
   if (item.category === "file") {
@@ -465,7 +472,7 @@ export function getItemMetadata(
 ): Array<[string, string]> {
   if (item.category === "app") {
     return [
-      ["Kind", "Application"],
+      ["Kind", item.rightLabel || "Application"],
       ["Location", item.location || item.path || "—"],
       ["Version", item.version || "—"],
       ["Size", item.size || "—"],
@@ -492,6 +499,19 @@ const SUGGESTED_APP_NAMES = new Set([
   "Visual Studio Code",
 ]);
 
+function matchesWordInitials(name: string, loweredQuery: string): boolean {
+  if (loweredQuery.length < 3 || !/^[a-z0-9]+$/.test(loweredQuery)) {
+    return false;
+  }
+  const initials = name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("");
+  return initials.length >= loweredQuery.length && initials.startsWith(loweredQuery);
+}
+
 export function scoreItem(item: LauncherItem, loweredQuery: string): number {
   const nameLow = item.name.toLowerCase();
   const haystack = `${nameLow} ${item.keywords} ${item.subtitle.toLowerCase()}`;
@@ -503,6 +523,9 @@ export function scoreItem(item: LauncherItem, loweredQuery: string): number {
   }
   if (item.keywords.split(" ").some((word) => word.startsWith(loweredQuery))) {
     return 2;
+  }
+  if (matchesWordInitials(item.name, loweredQuery)) {
+    return 1.5;
   }
   return haystack.includes(loweredQuery) ? 1 : 0;
 }
@@ -722,6 +745,8 @@ export function buildSections(
         },
       ],
     });
+
+    return sections;
   }
 
   if (searchResponse) {
@@ -843,5 +868,15 @@ export function hasOnlyFallbackSections(
   return (
     sections.length > 0 &&
     sections.every((section) => section.category === "fb")
+  );
+}
+
+export function isSearchWithoutResults(
+  rawQuery: string,
+  sections: readonly LauncherSection[],
+): boolean {
+  return (
+    rawQuery.trim().length > 0 &&
+    (sections.length === 0 || hasOnlyFallbackSections(sections))
   );
 }

@@ -21,6 +21,13 @@ import {
   loadUsageEntries,
   recordItemUsage,
 } from "./usage";
+import {
+  FAVORITES_STORAGE_KEY,
+  getFavoriteItems,
+  getFavoriteKey,
+  loadFavoriteEntries,
+  toggleFavoriteItem,
+} from "./favorites";
 import type { LauncherItem } from "./types";
 
 function assertEqual<T>(actual: T, expected: T, message?: string): void {
@@ -307,16 +314,120 @@ console.log("Running Settings and Density unit tests...");
 }
 
 // 15. Invalid usage data is ignored safely
-{
-  localStorage.clear();
-  localStorage.setItem(ITEM_USAGE_STORAGE_KEY, "{not-json");
-  assertEqual(loadUsageEntries().length, 0, "malformed usage data is ignored");
+  {
+    localStorage.clear();
+    localStorage.setItem(ITEM_USAGE_STORAGE_KEY, "{not-json");
+    assertEqual(loadUsageEntries().length, 0, "malformed usage data is ignored");
 
-  localStorage.setItem(
-    ITEM_USAGE_STORAGE_KEY,
-    JSON.stringify([{ key: "invalid", count: -1 }]),
-  );
-  assertEqual(loadUsageEntries().length, 0, "invalid usage entries are discarded");
-}
+    localStorage.setItem(
+      ITEM_USAGE_STORAGE_KEY,
+      JSON.stringify([{ key: "invalid", count: -1 }]),
+    );
+    assertEqual(loadUsageEntries().length, 0, "invalid usage entries are discarded");
+  }
+
+  // 16. New settings have correct defaults
+  {
+    localStorage.clear();
+    const settings = loadSettings();
+    assertEqual(settings.inlineAutocomplete, true, "inlineAutocomplete defaults to true");
+    assertEqual(settings.showFrequent, true, "showFrequent defaults to true");
+    assertEqual(settings.showFavorites, true, "showFavorites defaults to true");
+  }
+
+  // 17. New settings persist correctly
+  {
+    localStorage.clear();
+    const state: SettingsState = {
+      ...DEFAULT_SETTINGS,
+      inlineAutocomplete: false,
+      showFrequent: false,
+      showFavorites: false,
+    };
+    saveSettings(state);
+    const reloaded = loadSettings();
+    assertEqual(reloaded.inlineAutocomplete, false, "inlineAutocomplete persists");
+    assertEqual(reloaded.showFrequent, false, "showFrequent persists");
+    assertEqual(reloaded.showFavorites, false, "showFavorites persists");
+  }
+
+  // 18. Favorites persist, deduplicate, and preserve snapshot data
+  {
+    localStorage.clear();
+    const app: LauncherItem = {
+      category: "app",
+      name: "Firefox",
+      subtitle: "Start Menu",
+      keywords: "",
+      rightLabel: "Application",
+      primaryLabel: "Open Application",
+      actions: [],
+      path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Firefox.lnk",
+      location: "C:\\Program Files\\Firefox\\firefox.exe",
+    };
+    const folder: LauncherItem = {
+      category: "file",
+      name: "Projects",
+      subtitle: "D:\\Projects",
+      keywords: "",
+      rightLabel: "Folder",
+      primaryLabel: "Open Folder",
+      actions: [],
+      path: "D:\\Projects",
+      location: "D:\\Projects",
+    };
+
+    const afterApp = toggleFavoriteItem(app);
+    const afterFolder = toggleFavoriteItem(folder);
+    assertEqual(afterApp.length, 1, "favorite add returns one entry");
+    assertEqual(afterFolder.length, 2, "favorite add returns two entries");
+    assertEqual(
+      getFavoriteKey(app),
+      "app:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Firefox.lnk",
+      "favorite key is stable",
+    );
+    assertEqual(
+      localStorage.getItem(FAVORITES_STORAGE_KEY) !== null,
+      true,
+      "favorites are persisted locally",
+    );
+
+    const stored = loadFavoriteEntries();
+    assertEqual(stored[0]?.name, "Projects", "newest favorite is first");
+    assertEqual(stored[1]?.name, "Firefox", "previous favorite is retained");
+    assertEqual(
+      getFavoriteItems(stored)[0]?.rightLabel,
+      "Folder",
+      "favorite snapshot restores item metadata",
+    );
+    assertEqual(
+      getFavoriteItems(stored)[0]?.primaryLabel,
+      "Open Folder",
+      "favorite snapshot restores derived actions",
+    );
+
+    const afterRemove = toggleFavoriteItem(app);
+    assertEqual(afterRemove.length, 1, "toggling an existing favorite removes it");
+    assertEqual(afterRemove[0]?.name, "Projects", "remaining favorite is preserved");
+  }
+
+  // 19. Invalid favorite data is ignored safely
+  {
+    localStorage.clear();
+    localStorage.setItem(FAVORITES_STORAGE_KEY, "{not-json");
+    assertEqual(loadFavoriteEntries().length, 0, "malformed favorites are ignored");
+
+    localStorage.setItem(
+      FAVORITES_STORAGE_KEY,
+      JSON.stringify([
+        { category: "file", name: "Notes", path: "D:\\notes.txt" },
+        { category: "file", name: "Notes duplicate", path: "D:\\notes.txt" },
+        { category: "calc", name: "Invalid", path: "2 + 2" },
+      ]),
+    );
+    const entries = loadFavoriteEntries();
+    assertEqual(entries.length, 1, "invalid and duplicate favorites are discarded");
+    assertEqual(entries[0]?.name, "Notes", "first duplicate favorite wins");
+  }
 
 console.log("Settings and Density unit tests passed successfully.");

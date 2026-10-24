@@ -26,6 +26,11 @@ export interface ItemAction {
   readonly danger?: boolean;
 }
 
+export interface QuickAnswerDetail {
+  readonly label: string;
+  readonly value: string;
+}
+
 export interface CalcPreview {
   readonly value: string;
   readonly expression: string;
