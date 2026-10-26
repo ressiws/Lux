@@ -59,6 +59,46 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     "msocache",
 ];
 
+const NOISY_PATH_SEGMENTS: &[&str] = &[
+    "appdata",
+    "application data",
+    "local settings",
+    "cache",
+    "caches",
+    ".cache",
+    "cache2",
+    "code cache",
+    "gpucache",
+    "cachestorage",
+    "service worker",
+    "crashpad",
+    "crash dumps",
+    "deriveddata",
+    "index",
+    "indexes",
+    "logs",
+    "temp",
+    "tmp",
+    "node_modules",
+    "target",
+    "obj",
+    "dist",
+    "build",
+    "coverage",
+    ".git",
+    ".idea",
+    ".vscode",
+    ".vs",
+    ".gradle",
+    ".nuget",
+    ".npm",
+    ".yarn",
+    ".pnpm-store",
+];
+
+const NOISY_PATH_PENALTY: u32 = 25;
+const GLOB_FILENAME_SCORE: u32 = 80;
+
 const EXCLUDED_APP_PATTERNS: &[&str] = &[
     "uninstall",
     "unins000",
@@ -1137,6 +1177,182 @@ pub fn score_match(name: &str, keywords: &str, query: &str) -> u32 {
     0
 }
 
+fn is_glob_query(query: &str) -> bool {
+    query.contains('*') || query.contains('?')
+}
+
+fn glob_has_separator(pattern: &str) -> bool {
+    pattern.contains('/') || pattern.contains('\\')
+}
+
+/// Path globs use `**` semantics that external search backends do not share,
+/// so they are evaluated against the native file index.
+pub(crate) fn is_path_glob_query(query: &str) -> bool {
+    is_glob_query(query) && glob_has_separator(query)
+}
+
+/// Matches a filename or path segment against a glob pattern supporting `*`
+/// and `?`.
+///
+/// Matching is case-insensitive and treats every other character literally,
+/// so glob characters never act as regular-expression syntax.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+
+    let mut pattern_index = 0;
+    let mut text_index = 0;
+    let mut last_star: Option<usize> = None;
+    let mut last_star_text = 0;
+
+    while text_index < text.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == '?' || pattern[pattern_index] == text[text_index])
+        {
+            pattern_index += 1;
+            text_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            last_star = Some(pattern_index);
+            last_star_text = text_index;
+            pattern_index += 1;
+        } else if let Some(star) = last_star {
+            pattern_index = star + 1;
+            last_star_text += 1;
+            text_index = last_star_text;
+        } else {
+            return false;
+        }
+    }
+
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern.len()
+}
+
+fn glob_segments(value: &str) -> Vec<String> {
+    value
+        .replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.to_lowercase())
+        .collect()
+}
+
+fn is_windows_drive_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn is_absolute_glob_pattern(pattern: &str) -> bool {
+    pattern.starts_with('/')
+        || glob_segments(pattern)
+            .first()
+            .is_some_and(|segment| is_windows_drive_segment(segment))
+}
+
+fn is_root_relative_pattern(pattern: &str) -> bool {
+    pattern.starts_with('/') && !pattern.starts_with("//")
+}
+
+fn match_glob_segments(pattern: &[String], path: &[String]) -> bool {
+    let mut matches = vec![vec![false; path.len() + 1]; pattern.len() + 1];
+    matches[0][0] = true;
+
+    for pattern_index in 1..=pattern.len() {
+        let segment = &pattern[pattern_index - 1];
+        if segment == "**" {
+            matches[pattern_index][0] = matches[pattern_index - 1][0];
+            for path_index in 1..=path.len() {
+                matches[pattern_index][path_index] = matches[pattern_index - 1][path_index]
+                    || matches[pattern_index][path_index - 1];
+            }
+        } else {
+            for path_index in 1..=path.len() {
+                matches[pattern_index][path_index] = matches[pattern_index - 1][path_index - 1]
+                    && glob_matches(segment, &path[path_index - 1]);
+            }
+        }
+    }
+
+    matches[pattern.len()][path.len()]
+}
+
+/// Matches a path glob. Relative patterns may match at any directory depth,
+/// while patterns beginning with `/` are anchored to the root or drive.
+fn glob_path_matches(pattern: &str, path: &str) -> bool {
+    let normalized_pattern = pattern.replace('\\', "/");
+    let pattern_segments = glob_segments(&normalized_pattern);
+    if pattern_segments.is_empty() {
+        return false;
+    }
+
+    let path_segments = glob_segments(path);
+
+    if !is_absolute_glob_pattern(&normalized_pattern) {
+        return (0..=path_segments.len())
+            .any(|start| match_glob_segments(&pattern_segments, &path_segments[start..]));
+    }
+
+    let strip_drive = is_root_relative_pattern(&normalized_pattern)
+        && path_segments
+            .first()
+            .is_some_and(|segment| is_windows_drive_segment(segment));
+    let comparison_path = if strip_drive {
+        &path_segments[1..]
+    } else {
+        &path_segments[..]
+    };
+
+    match_glob_segments(&pattern_segments, comparison_path)
+}
+
+fn score_glob_match(name: &str, path: &Path, pattern: &str) -> u32 {
+    let matched = if glob_has_separator(pattern) {
+        glob_path_matches(pattern, &path.to_string_lossy())
+    } else {
+        glob_matches(pattern, name)
+    };
+
+    if matched {
+        GLOB_FILENAME_SCORE
+    } else {
+        0
+    }
+}
+
+fn path_noise_penalty(path: &Path) -> u32 {
+    let is_noisy = path.parent().unwrap_or(path).components().any(|component| {
+        let segment = component.as_os_str().to_string_lossy().to_lowercase();
+        NOISY_PATH_SEGMENTS.contains(&segment.as_str())
+    });
+
+    if is_noisy { NOISY_PATH_PENALTY } else { 0 }
+}
+
+pub fn score_file_match(name: &str, keywords: &str, path: &Path, query: &str) -> u32 {
+    let trimmed = query.trim();
+    let is_glob = is_glob_query(trimmed);
+    let mut score = if is_glob {
+        score_glob_match(name, path, trimmed)
+    } else {
+        score_match(name, keywords, trimmed)
+    };
+
+    if !is_glob && (query.contains('/') || query.contains('\\')) {
+        let query_norm = query.replace('\\', "/").to_lowercase();
+        let path_norm = path.to_string_lossy().replace('\\', "/").to_lowercase();
+        if path_norm.ends_with(&query_norm) {
+            score = score.max(90);
+        } else if path_norm.contains(&query_norm) {
+            score = score.max(45);
+        }
+    }
+
+    score.saturating_sub(path_noise_penalty(path))
+}
+
 fn score_app_abbreviation(app_name: &str, query: &str) -> u32 {
     let query_low = query.trim().to_lowercase();
     if query_low.len() < 3 || !query_low.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -1973,24 +2189,9 @@ pub fn search_index(
         .files
         .iter()
         .filter_map(|file| {
-            let mut score = score_match(&file.name, &file.subtitle, trimmed);
+            let score = score_file_match(&file.name, &file.subtitle, &file.path, trimmed);
 
-            // Allow path-fragment matches (e.g. "projects/lux" or "lux\page")
-            if trimmed.contains('/') || trimmed.contains('\\') {
-                let query_norm = trimmed.replace('\\', "/").to_lowercase();
-                let path_norm = file.path.to_string_lossy().replace('\\', "/").to_lowercase();
-                if path_norm.ends_with(&query_norm) {
-                    score = score.max(90);
-                } else if path_norm.contains(&query_norm) {
-                    score = score.max(45);
-                }
-            }
-
-            if score > 0 {
-                Some((score, file))
-            } else {
-                None
-            }
+            if score > 0 { Some((score, file)) } else { None }
         })
         .collect();
 
@@ -2017,6 +2218,32 @@ pub fn search_index(
         .collect();
 
     (app_results, file_results)
+}
+
+pub fn rank_file_results(files: Vec<SearchResultItem>, query: &str) -> Vec<SearchResultItem> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return files;
+    }
+
+    let is_glob = is_glob_query(trimmed);
+    let mut ranked: Vec<(u32, SearchResultItem)> = files
+        .into_iter()
+        .map(|file| {
+            let score =
+                score_file_match(&file.name, &file.subtitle, Path::new(&file.path), trimmed);
+            (score, file)
+        })
+        .filter(|(score, _)| !is_glob || *score > 0)
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.name.len().cmp(&b.1.name.len()))
+            .then_with(|| a.1.name.cmp(&b.1.name))
+    });
+
+    ranked.into_iter().map(|(_, file)| file).collect()
 }
 
 pub fn browse_index(
@@ -2673,6 +2900,426 @@ mod tests {
         assert_eq!(score_match("LightCraft", "", "craft"), 40);
         assert_eq!(score_match("LightCraft", "photo editor", "photo"), 25);
         assert_eq!(score_match("Calculator", "", "zebra"), 0);
+    }
+
+    #[test]
+    fn test_noisy_paths_are_deprioritized_without_excluding_them() {
+        let make_file = |name: &str, path: &str, subtitle: &str| IndexedFile {
+            name: name.to_string(),
+            subtitle: subtitle.to_string(),
+            path: PathBuf::from(path),
+            location: Path::new(path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            is_image: false,
+            extension: Path::new(name)
+                .extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            right_label: "File".to_string(),
+            size: None,
+            icon: None,
+        };
+
+        let index = SearchIndex {
+            apps: vec![],
+            files: vec![
+                make_file(
+                    "plugin.xml",
+                    "C:/Users/tester/AppData/Local/JetBrains/IntelliJIdea2024.1/index/plugin.xml",
+                    "index",
+                ),
+                make_file(
+                    "plugin-notes.md",
+                    "C:/Users/tester/Projects/lux/plugin-notes.md",
+                    "lux",
+                ),
+                make_file("plugin", "C:/Users/tester/Documents/plugin", "Documents"),
+                make_file(
+                    "myplugin-notes.md",
+                    "C:/Users/tester/Documents/myplugin-notes.md",
+                    "Documents",
+                ),
+                make_file(
+                    "plugin",
+                    "C:/Users/tester/AppData/Roaming/SomeApp/plugin",
+                    "SomeApp",
+                ),
+            ],
+            is_indexed: true,
+        };
+
+        let (_, files) = search_index(&index, "plugin");
+        let position = |predicate: &dyn Fn(&SearchResultItem) -> bool| {
+            files.iter().position(predicate).expect("expected result")
+        };
+
+        let clean_exact = position(&|file| {
+            file.name == "plugin" && !file.path.to_lowercase().contains("appdata")
+        });
+        let noisy_exact =
+            position(&|file| file.name == "plugin" && file.path.to_lowercase().contains("appdata"));
+        let clean_partial = position(&|file| file.name == "plugin-notes.md");
+        let noisy_index = position(&|file| file.name == "plugin.xml");
+        let weak_clean = position(&|file| file.name == "myplugin-notes.md");
+
+        assert_eq!(clean_exact, 0, "Exact clean filename ranks first");
+        assert!(
+            clean_partial < noisy_index,
+            "Relevant user file ranks above IDE index files in AppData"
+        );
+        assert!(
+            noisy_exact < weak_clean,
+            "Strong match inside AppData stays above weak incidental matches"
+        );
+        assert!(
+            files.iter().any(|file| file.name == "plugin.xml"),
+            "Files inside noisy directories remain discoverable"
+        );
+    }
+
+    #[test]
+    fn test_everything_results_use_the_same_file_ranking() {
+        let make_file = |name: &str, path: &str, subtitle: &str| IndexedFile {
+            name: name.to_string(),
+            subtitle: subtitle.to_string(),
+            path: PathBuf::from(path),
+            location: String::new(),
+            is_image: false,
+            extension: String::new(),
+            right_label: "File".to_string(),
+            size: None,
+            icon: None,
+        };
+
+        let files = vec![
+            build_file_search_result(&make_file(
+                "plugin.xml",
+                "C:/Users/tester/AppData/Local/JetBrains/IntelliJIdea2024.1/index/plugin.xml",
+                "index",
+            )),
+            build_file_search_result(&make_file(
+                "plugin-notes.md",
+                "C:/Users/tester/Projects/lux/plugin-notes.md",
+                "lux",
+            )),
+        ];
+
+        let ranked = rank_file_results(files, "plugin");
+        assert_eq!(ranked[0].name, "plugin-notes.md");
+        assert!(
+            ranked.iter().any(|file| file.name == "plugin.xml"),
+            "Ranking keeps noisy-path matches available"
+        );
+    }
+
+    fn glob_test_file(name: &str, path: &str) -> IndexedFile {
+        IndexedFile {
+            name: name.to_string(),
+            subtitle: String::new(),
+            path: PathBuf::from(path),
+            location: String::new(),
+            is_image: false,
+            extension: name.rsplit('.').next().unwrap_or("").to_string(),
+            right_label: "File".to_string(),
+            size: None,
+            icon: None,
+        }
+    }
+
+    #[test]
+    fn test_glob_matches_star_and_question() {
+        assert!(glob_matches("*.dll", "library.dll"));
+        assert!(glob_matches("*.dll", ".dll"));
+        assert!(!glob_matches("*.dll", "library.txt"));
+
+        assert!(glob_matches("plugin*.cs", "plugin.cs"));
+        assert!(glob_matches("plugin*.cs", "plugin-helper.cs"));
+        assert!(!glob_matches("plugin*.cs", "myplugin.cs"));
+
+        assert!(glob_matches("*config*", "app-config.json"));
+        assert!(glob_matches("*config*", "config"));
+        assert!(!glob_matches("*config*", "settings.json"));
+
+        assert!(glob_matches("test?.cs", "test1.cs"));
+        assert!(glob_matches("test?.cs", "testA.cs"));
+        assert!(!glob_matches("test?.cs", "test.cs"));
+        assert!(!glob_matches("test?.cs", "test12.cs"));
+    }
+
+    #[test]
+    fn test_glob_matching_is_case_insensitive_and_literal() {
+        assert!(glob_matches("*.DLL", "library.dll"));
+        assert!(glob_matches("PLUGIN*.CS", "plugin-helper.cs"));
+        assert!(is_glob_query("*.dll"));
+        assert!(is_glob_query("test?.cs"));
+        assert!(!is_glob_query("plugin.cs"));
+
+        // Characters that are special in regular expressions stay literal.
+        assert!(glob_matches("file[1].*", "file[1].txt"));
+        assert!(!glob_matches("file[1].*", "file1.txt"));
+        assert!(glob_matches("(draft)*.md", "(draft)notes.md"));
+    }
+
+    #[test]
+    fn test_search_index_glob_queries() {
+        let index = SearchIndex {
+            apps: vec![],
+            files: vec![
+                glob_test_file("library.dll", "C:/Users/tester/Documents/library.dll"),
+                glob_test_file("settings.json", "C:/Users/tester/Documents/settings.json"),
+                glob_test_file("plugin.cs", "C:/Users/tester/Projects/plugin.cs"),
+                glob_test_file(
+                    "plugin-helper.cs",
+                    "C:/Users/tester/Projects/plugin-helper.cs",
+                ),
+                glob_test_file("test1.cs", "C:/Users/tester/Projects/test1.cs"),
+                glob_test_file("test12.cs", "C:/Users/tester/Projects/test12.cs"),
+                glob_test_file("notes.md", "C:/Users/tester/Documents/notes.md"),
+            ],
+            is_indexed: true,
+        };
+
+        let names = |query: &str| -> Vec<String> {
+            let (_, files) = search_index(&index, query);
+            files.into_iter().map(|file| file.name).collect()
+        };
+
+        assert_eq!(names("*.dll"), vec!["library.dll"]);
+        assert_eq!(names("*.json"), vec!["settings.json"]);
+        assert_eq!(names("plugin*.cs"), vec!["plugin.cs", "plugin-helper.cs"]);
+        assert_eq!(names("test?.cs"), vec!["test1.cs"]);
+        assert_eq!(names("*.DLL"), vec!["library.dll"]);
+        assert!(names("*.does-not-exist").is_empty());
+    }
+
+    #[test]
+    fn test_glob_ranking_prefers_clean_paths() {
+        let index = SearchIndex {
+            apps: vec![],
+            files: vec![
+                glob_test_file("a.dll", "C:/Users/tester/AppData/Local/SomeApp/cache/a.dll"),
+                glob_test_file(
+                    "longer-name.dll",
+                    "C:/Users/tester/Projects/longer-name.dll",
+                ),
+            ],
+            is_indexed: true,
+        };
+
+        let (_, files) = search_index(&index, "*.dll");
+        assert_eq!(
+            files.iter().map(|file| file.name.as_str()).collect::<Vec<_>>(),
+            vec!["longer-name.dll", "a.dll"],
+            "Clean paths outrank shorter names inside noisy directories"
+        );
+    }
+
+    #[test]
+    fn test_glob_rank_file_results_filters_non_matches() {
+        let files = vec![
+            build_file_search_result(&glob_test_file(
+                "plugin.cs",
+                "C:/Users/tester/Projects/plugin.cs",
+            )),
+            build_file_search_result(&glob_test_file(
+                "plugin-helper.cs",
+                "C:/Users/tester/Projects/plugin-helper.cs",
+            )),
+            build_file_search_result(&glob_test_file(
+                "notes.md",
+                "C:/Users/tester/Documents/notes.md",
+            )),
+        ];
+
+        let ranked = rank_file_results(files.clone(), "plugin*.cs");
+        assert_eq!(
+            ranked.iter().map(|file| file.name.as_str()).collect::<Vec<_>>(),
+            vec!["plugin.cs", "plugin-helper.cs"]
+        );
+
+        let ranked_upper = rank_file_results(files.clone(), "PLUGIN*.CS");
+        assert_eq!(ranked_upper.len(), 2);
+
+        let ordinary = rank_file_results(files, "plugin");
+        assert_eq!(
+            ordinary.len(),
+            3,
+            "Ordinary queries keep the previous non-filtering behavior"
+        );
+    }
+
+    #[test]
+    fn test_glob_path_recursive_patterns() {
+        assert!(glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/Projects/lux/src/components/button.test.ts"
+        ));
+        assert!(glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/Projects/lux/src/button.test.ts"
+        ));
+        assert!(glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/Projects/lux/src/core/nested/button.test.ts"
+        ));
+        assert!(glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/src/button.test.ts"
+        ));
+        assert!(!glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/Projects/lux/tests/button.test.ts"
+        ));
+        assert!(!glob_path_matches(
+            "**/src/**/*.test.ts",
+            "C:/Projects/lux/src/button.ts"
+        ));
+
+        assert!(glob_path_matches(
+            "src/**/*.test.ts",
+            "C:/Projects/lux/src/core/button.test.ts"
+        ));
+        assert!(glob_path_matches(
+            "src/**/*.test.ts",
+            "C:/Projects/lux/src/button.test.ts"
+        ));
+        assert!(!glob_path_matches(
+            "src/*.test.ts",
+            "C:/Projects/lux/src/core/button.test.ts"
+        ));
+        assert!(!glob_path_matches(
+            "**/[unclosed/*.ts",
+            "C:/Projects/lux/src/button.test.ts"
+        ));
+    }
+
+    #[test]
+    fn test_glob_path_absolute_patterns() {
+        let pattern = "/path/to/some/**/where/*.js";
+
+        assert!(glob_path_matches(pattern, "/path/to/some/where/app.js"));
+        assert!(glob_path_matches(pattern, "/path/to/some/a/b/where/app.js"));
+        assert!(glob_path_matches(pattern, "C:/path/to/some/a/where/app.js"));
+        assert!(!glob_path_matches(
+            pattern,
+            "/path/to/some/a/where/deep/app.js"
+        ));
+        assert!(!glob_path_matches(
+            pattern,
+            "/other/path/to/some/a/where/app.js"
+        ));
+    }
+
+    #[test]
+    fn test_glob_path_windows_separators_and_case() {
+        assert!(glob_path_matches(
+            "C:\\Projects\\**\\src\\**\\*.rs",
+            "C:/Projects/lux/src/main.rs"
+        ));
+        assert!(glob_path_matches(
+            "C:/Projects/**/src/**/*.rs",
+            r"C:\Projects\lux\crates\app\src\lib.rs"
+        ));
+        assert!(glob_path_matches(
+            r"\Users\**\src\**\*.rs",
+            "C:/Users/tester/projects/src/main.rs"
+        ));
+        assert!(glob_path_matches(
+            "Projects/Lux/**/*.rs",
+            "D:/projects/Lux/app/src/main.rs"
+        ));
+        assert!(!glob_path_matches(
+            "C:/Other/**/*.rs",
+            "C:/Projects/lux/src/main.rs"
+        ));
+        assert!(!glob_path_matches("/", "C:/Projects/lux/src/main.rs"));
+    }
+
+    #[test]
+    fn test_glob_path_detection() {
+        assert!(is_path_glob_query("**/src/**/*.test.ts"));
+        assert!(is_path_glob_query(r"src\**\*.ts"));
+        assert!(!is_path_glob_query("*.dll"));
+        assert!(!is_path_glob_query("plugin*.cs"));
+        assert!(!is_path_glob_query("plugin"));
+    }
+
+    #[test]
+    fn test_search_index_path_glob_queries() {
+        let files = vec![
+            glob_test_file(
+                "button.test.ts",
+                "C:/Projects/lux/src/components/button.test.ts",
+            ),
+            glob_test_file("button.test.ts", "C:/Projects/lux/src/button.test.ts"),
+            glob_test_file("button.ts", "C:/Projects/lux/src/button.ts"),
+            glob_test_file("button.test.ts", "C:/Projects/lux/tests/button.test.ts"),
+            glob_test_file(
+                "format.test.ts",
+                "C:/Projects/other/src/deep/nested/format.test.ts",
+            ),
+            glob_test_file("app.js", "D:/path/to/some/where/app.js"),
+            glob_test_file("nested.js", "D:/path/to/some/a/b/where/nested.js"),
+            glob_test_file("app.ts", "D:/path/to/some/a/b/where/app.ts"),
+            glob_test_file("library.dll", "C:/Projects/lux/library.dll"),
+        ];
+        let index = SearchIndex {
+            apps: vec![],
+            files,
+            is_indexed: true,
+        };
+
+        let paths = |query: &str| -> Vec<String> {
+            let (_, results) = search_index(&index, query);
+            let mut paths: Vec<String> = results.into_iter().map(|file| file.path).collect();
+            paths.sort();
+            paths
+        };
+
+        assert_eq!(
+            paths("**/src/**/*.test.ts"),
+            vec![
+                "C:/Projects/lux/src/button.test.ts".to_string(),
+                "C:/Projects/lux/src/components/button.test.ts".to_string(),
+                "C:/Projects/other/src/deep/nested/format.test.ts".to_string(),
+            ]
+        );
+        assert_eq!(
+            paths("src/*.test.ts"),
+            vec!["C:/Projects/lux/src/button.test.ts".to_string()]
+        );
+        assert_eq!(
+            paths("/path/to/some/**/where/*.js"),
+            vec![
+                "D:/path/to/some/a/b/where/nested.js".to_string(),
+                "D:/path/to/some/where/app.js".to_string(),
+            ]
+        );
+        assert_eq!(
+            paths("*.dll"),
+            vec!["C:/Projects/lux/library.dll".to_string()]
+        );
+        assert!(paths("**/src/**/*.does-not-exist").is_empty());
+        assert_eq!(
+            paths("button").len(),
+            4,
+            "Ordinary queries keep their existing filename matching"
+        );
+    }
+
+    #[test]
+    fn test_glob_scoring_matches_indexed_paths_not_just_names() {
+        let path = Path::new(r"C:\Projects\Lux\src\core\button.test.ts");
+
+        assert!(score_file_match("button.test.ts", "", path, r"**\src\**\*.test.ts") > 0);
+        assert_eq!(
+            score_file_match("button.test.ts", "", path, "src/*.test.ts"),
+            0,
+            "Directory separators make the pattern match the path, not just the name"
+        );
+        assert!(score_file_match("button.test.ts", "", path, "*.test.ts") > 0);
     }
 
     #[test]

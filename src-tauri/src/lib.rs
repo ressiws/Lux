@@ -83,7 +83,8 @@ fn search_launcher(
         };
     }
 
-    let everything_result = if state.is_everything_active() {
+    let use_everything = state.is_everything_active() && !search::is_path_glob_query(trimmed);
+    let everything_result = if use_everything {
         let guard = state.everything.lock().ok();
         guard.and_then(|g| {
             g.as_ref().map(|mgr| mgr.search(trimmed, 50))
@@ -98,6 +99,7 @@ fn search_launcher(
                 let app_paths: std::collections::HashSet<String> =
                     apps.iter().map(|a| a.path.clone()).collect();
                 files.retain(|f| !app_paths.contains(&f.path));
+                let files = search::rank_file_results(files, trimmed);
                 return search::SearchResponse {
                     apps,
                     files,
