@@ -2020,7 +2020,7 @@
 									<div class="about-title-row">
 										<span class="about-title">Lux</span>
 										<span class="about-ver"
-											>v0.1.0-beta.4</span
+											>v0.1.0-beta.5</span
 										>
 									</div>
 									<p class="about-desc">

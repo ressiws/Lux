@@ -37,6 +37,8 @@ Lux indexes your installed system applications directly from Windows Start Menu 
 ### Real File Search
 Lux indexes your local user directories (Desktop, Documents, Downloads, Music, Pictures, Videos) and system drives using a local SQLite index.
 - **No Mock or Fabricated Data**: Lux only presents genuine local files discovered on your machine.
+- **Relevance Ranking**: Exact filenames and files matching the whole query rank first. Generated and cache locations such as `%AppData%`, IDE indexes, build output, and temporary folders are ranked lower, but their files remain searchable.
+- **Glob Patterns**: Use `*` (zero or more characters within a path segment), `?` (exactly one character within a path segment), and `**` (zero or more directories) to match indexed files. Patterns without a directory separator match filenames, such as `*.dll`, `plugin*.cs`, `*config*`, or `test?.cs`. Patterns with `/` or `\` match indexed paths, such as `**/src/**/*.test.ts` or `/path/to/some/**/where/*.js`. A leading `/` anchors a pattern to the drive or filesystem root, while relative path patterns can match at any depth. Matching is case-insensitive, both separators are normalized, and path globs are evaluated against Lux's local file index. Ordinary queries without glob characters keep their existing behavior and ranking.
 - **Folders First**: Folder browsing presents directories at the top for intuitive file system traversal.
 - **Incremental Loading**: Browsing large collections loads results smoothly in batches of 50 items as you scroll, preventing UI freezes.
 
